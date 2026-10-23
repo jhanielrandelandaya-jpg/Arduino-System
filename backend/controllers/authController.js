@@ -1,6 +1,6 @@
 const crypto = require('crypto')
 const jwt = require('jsonwebtoken')
-const { readUsers, writeUsers } = require('../utils/userStore')
+const db = require('../config/database')
 const { hashPassword, verifyPassword } = require('../utils/password')
 const { jwtSecret, jwtExpiresIn } = require('../config/auth')
 
@@ -10,10 +10,10 @@ const USERNAME_PATTERN = /^[a-zA-Z0-9._-]+$/
 
 const sanitizeUser = (user) => ({
   id: user.id,
-  fullName: user.fullName,
+  fullName: user.full_name || user.fullName,
   username: user.username,
   role: user.role,
-  createdAt: user.createdAt,
+  createdAt: user.created_at || user.createdAt,
 })
 
 const createToken = (user) =>
@@ -60,12 +60,9 @@ const register = async (req, res) => {
   }
 
   try {
-    const users = await readUsers()
-    const identifier = cleanUsername.toLowerCase()
-
-    const exists = users.some(
-      (user) => user.username.toLowerCase() === identifier,
-    )
+    const exists = db
+      .prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)')
+      .get(cleanUsername)
 
     if (exists) {
       return res.status(409).json({
@@ -75,19 +72,24 @@ const register = async (req, res) => {
 
     const user = {
       id: crypto.randomUUID(),
-      fullName: cleanName,
+      full_name: cleanName,
       username: cleanUsername,
-      passwordHash: hashPassword(cleanPassword),
+      password_hash: hashPassword(cleanPassword),
       role: cleanRole,
-      createdAt: new Date().toISOString(),
     }
 
-    await writeUsers([...users, user])
+    db.prepare(
+      `INSERT INTO users (id, full_name, username, password_hash, role)
+       VALUES (@id, @full_name, @username, @password_hash, @role)`,
+    ).run(user)
+
+    const created = db
+      .prepare('SELECT id, full_name, username, role, created_at FROM users WHERE id = ?')
+      .get(user.id)
 
     return res.status(201).json({
-      message: 'Account created successfully.',
-      token: createToken(user),
-      user: sanitizeUser(user),
+      message: 'Account created successfully. Please sign in.',
+      user: sanitizeUser(created),
     })
   } catch (error) {
     console.error('Register error:', error)
@@ -110,12 +112,13 @@ const login = async (req, res) => {
   }
 
   try {
-    const users = await readUsers()
-    const user = users.find(
-      (candidate) => candidate.username.toLowerCase() === cleanUsername,
-    )
+    const user = db
+      .prepare(
+        'SELECT id, full_name, username, role, password_hash, created_at FROM users WHERE LOWER(username) = LOWER(?)',
+      )
+      .get(cleanUsername)
 
-    if (!user || !verifyPassword(cleanPassword, user.passwordHash)) {
+    if (!user || !verifyPassword(cleanPassword, user.password_hash)) {
       return res
         .status(401)
         .json({ message: 'Invalid username, email, or password.' })
@@ -136,8 +139,11 @@ const login = async (req, res) => {
 
 const getMe = async (req, res) => {
   try {
-    const users = await readUsers()
-    const user = users.find((candidate) => candidate.id === req.userId)
+    const user = db
+      .prepare(
+        'SELECT id, full_name, username, role, created_at FROM users WHERE id = ?',
+      )
+      .get(req.userId)
 
     if (!user) {
       return res.status(401).json({ message: 'Account not found.' })

@@ -251,15 +251,25 @@ button {
   box-shadow: 0 2px 8px rgb(20 40 70 / 8%);
 }
 
-.form-alert {
+.form-alert,
+.form-notice {
   margin-bottom: 20px;
   padding: 12px 14px;
-  border: 1px solid #f0c2c2;
   border-radius: 9px;
-  color: #a12c2c;
-  background: #fdf1f1;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.form-alert {
+  border: 1px solid #f0c2c2;
+  color: #a12c2c;
+  background: #fdf1f1;
+}
+
+.form-notice {
+  border: 1px solid #bfe3c8;
+  color: #25663a;
+  background: #eefaf1;
 }
 
 .form-group {
@@ -395,39 +405,6 @@ button {
 
 .submit-button span {
   font-size: 19px;
-}
-
-.account-details {
-  margin-bottom: 28px;
-  overflow: hidden;
-  border: 1px solid #e3e8f1;
-  border-radius: 12px;
-  background: #f8fafd;
-}
-
-.account-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 15px 18px;
-  border-bottom: 1px solid #e9edf4;
-}
-
-.account-row:last-child {
-  border-bottom: 0;
-}
-
-.account-row span {
-  color: #5f6b80;
-  font-size: 12px;
-}
-
-.account-row strong {
-  color: #1b2d49;
-  font-size: 13px;
-  text-align: right;
-  overflow-wrap: anywhere;
 }
 
 .switch-prompt {
