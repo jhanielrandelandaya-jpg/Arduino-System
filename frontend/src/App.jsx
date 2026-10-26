@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
-import Home from './Home.jsx'
+import { useEffect, useState } from 'react'
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+} from 'react-router-dom'
+import AuthPage from './auth/AuthPage.jsx'
+import StudentDashboard from './dashboard/StudentDashboard.jsx'
+import FacultyDashboard from './dashboard/FacultyDashboard.jsx'
 import './App.css'
 
 const TOKEN_KEY = 'learnspace_token'
@@ -35,56 +43,26 @@ const clearStoredToken = () => {
   }
 }
 
-function AuthVisual() {
-  return (
-    <section className="auth-visual">
-      <div className="brand">
-        <div className="brand-icon">L</div>
-        <span>LearnSpace</span>
-      </div>
+const getDashboardPath = (user) =>
+  user?.role === 'Faculty' ? '/faculty/dashboard' : '/student/dashboard'
 
-      <div className="visual-content">
-        <span className="eyebrow">YOUR LEARNING JOURNEY STARTS HERE</span>
+function ProtectedRoute({ user, role, children }) {
+  if (!user) {
+    return <Navigate to="/login" replace />
+  }
 
-        <h1>
-          Learn better.
-          <br />
-          Achieve more.
-        </h1>
+  if (user.role !== role) {
+    return <Navigate to={getDashboardPath(user)} replace />
+  }
 
-        <p>
-          Your subjects, lessons, notes, and quizzes in one organized
-          learning space.
-        </p>
-
-        <div className="visual-card">
-          <div className="book-icon">▤</div>
-          <div>
-            <strong>Your knowledge, your pace.</strong>
-            <p>Study, practice, and track your progress.</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="visual-footer">
-        A smarter way to learn, one lesson at a time.
-      </div>
-    </section>
-  )
+  return children
 }
 
 function App() {
-  const [isLogin, setIsLogin] = useState(true)
-  const [showPassword, setShowPassword] = useState(false)
-  const [role, setRole] = useState('Student')
   const [user, setUser] = useState(null)
   const [checkingSession, setCheckingSession] = useState(() =>
     Boolean(getStoredToken()),
   )
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
-  const usernameRef = useRef(null)
 
   useEffect(() => {
     const token = getStoredToken()
@@ -125,282 +103,73 @@ function App() {
     }
   }, [])
 
-  const switchMode = (loginMode) => {
-    setIsLogin(loginMode)
-    setError('')
-    setNotice('')
-    setShowPassword(false)
-  }
-
-  const handleSubmit = async (event) => {
-    event.preventDefault()
-    setError('')
-    setNotice('')
-
-    const form = event.currentTarget
-    const formData = new FormData(form)
-    const payload = {
-      username: String(formData.get('username') || '').trim(),
-      password: String(formData.get('password') || ''),
-    }
-
-    if (!isLogin) {
-      payload.fullName = String(formData.get('fullName') || '').trim()
-      payload.role = String(formData.get('role') || 'Student')
-    }
-
-    const remember = formData.get('remember') === 'on'
-    setIsSubmitting(true)
-
-    try {
-      const response = await fetch(
-        `/api/auth/${isLogin ? 'login' : 'register'}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        },
-      )
-      const data = await response.json().catch(() => ({}))
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Something went wrong. Please try again.')
-      }
-
-      if (isLogin) {
-        storeToken(data.token, remember)
-        setUser(data.user)
-        form.reset()
-        setShowPassword(false)
-      } else {
-        setNotice(
-          data.message || 'Account created successfully. Please sign in.',
-        )
-        setIsLogin(true)
-        setShowPassword(false)
-        setRole('Student')
-        form.reset()
-        if (usernameRef.current) {
-          usernameRef.current.value = payload.username
-        }
-      }
-    } catch (submitError) {
-      setError(
-        submitError.message ||
-          'We could not reach the server. Please try again.',
-      )
-    } finally {
-      setIsSubmitting(false)
-    }
+  const handleAuthenticated = (data, remember) => {
+    storeToken(data.token, remember)
+    setUser(data.user)
   }
 
   const handleLogout = () => {
     clearStoredToken()
     setUser(null)
-    setIsLogin(true)
-    setError('')
-    setNotice('')
-    setShowPassword(false)
   }
 
   if (checkingSession) {
     return (
       <main className="auth-loading">
         <div className="brand-icon">L</div>
-        <p>Checking your session...</p>
+        <p>Restoring your LearnSpace session...</p>
       </main>
     )
   }
 
-  if (user) {
-    return <Home user={user} onLogout={handleLogout} />
-  }
+  const dashboardPath = user ? getDashboardPath(user) : '/login'
 
   return (
-    <main className="auth-page">
-      <AuthVisual />
-
-      <section className="auth-panel">
-        <div className="mobile-brand">
-          <div className="brand-icon">L</div>
-          <span>LearnSpace</span>
-        </div>
-
-        <div className="auth-container">
-          <div className="auth-heading">
-            <span className="welcome-label">
-              {isLogin ? 'WELCOME BACK' : 'JOIN LEARNSPACE'}
-            </span>
-
-            <h2>
-              {isLogin ? 'Sign in to your account' : 'Create your account'}
-            </h2>
-
-            <p>
-              {isLogin
-                ? 'Enter your credentials to continue learning.'
-                : 'Fill in your details to get started.'}
-            </p>
-          </div>
-
-          <div className="auth-tabs">
-            <button
-              type="button"
-              className={isLogin ? 'tab active' : 'tab'}
-              onClick={() => switchMode(true)}
-            >
-              Sign In
-            </button>
-
-            <button
-              type="button"
-              className={!isLogin ? 'tab active' : 'tab'}
-              onClick={() => switchMode(false)}
-            >
-              Register
-            </button>
-          </div>
-
-          <form onSubmit={handleSubmit}>
-            {notice && (
-              <div className="form-notice" role="status">
-                {notice}
-              </div>
-            )}
-
-            {error && (
-              <div className="form-alert" role="alert">
-                {error}
-              </div>
-            )}
-
-            {!isLogin && (
-              <div className="form-group">
-                <label htmlFor="fullName">Full name</label>
-                <input
-                  id="fullName"
-                  name="fullName"
-                  type="text"
-                  placeholder="Enter your full name"
-                  autoComplete="name"
-                  required
-                />
-              </div>
-            )}
-
-            <div className="form-group">
-              <label htmlFor="username">Username or email</label>
-              <input
-                id="username"
-                name="username"
-                type="text"
-                placeholder="Enter your username or email"
-                autoComplete="username"
-                ref={usernameRef}
-                required
-              />
-            </div>
-
-            {!isLogin && (
-              <div className="form-group">
-                <label htmlFor="role">Account type</label>
-                <select
-                  id="role"
-                  name="role"
-                  value={role}
-                  onChange={(event) => setRole(event.target.value)}
-                >
-                  <option value="Student">Student</option>
-                  <option value="Faculty">Faculty</option>
-                </select>
-                <small>Choose the role you are registering for.</small>
-              </div>
-            )}
-
-            <div className="form-group">
-              <label htmlFor="password">Password</label>
-
-              <div className="password-field">
-                <input
-                  id="password"
-                  name="password"
-                  type={showPassword ? 'text' : 'password'}
-                  placeholder="Enter your password"
-                  autoComplete={isLogin ? 'current-password' : 'new-password'}
-                  minLength={8}
-                  required
-                />
-
-                <button
-                  type="button"
-                  className="show-password"
-                  onClick={() => setShowPassword(!showPassword)}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                >
-                  {showPassword ? 'Hide' : 'Show'}
-                </button>
-              </div>
-
-              {!isLogin && (
-                <small>Password must be at least 8 characters.</small>
-              )}
-            </div>
-
-            {isLogin && (
-              <div className="form-options">
-                <label className="remember-option">
-                  <input type="checkbox" name="remember" />
-                  <span>Remember me</span>
-                </label>
-
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={() =>
-                    alert('Password recovery will be added later.')
-                  }
-                >
-                  Forgot password?
-                </button>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="submit-button"
-              disabled={isSubmitting}
-            >
-              {isSubmitting
-                ? isLogin
-                  ? 'Signing in...'
-                  : 'Creating account...'
-                : isLogin
-                  ? 'Sign In'
-                  : 'Create Account'}
-              {!isSubmitting && <span>→</span>}
-            </button>
-          </form>
-
-          <p className="switch-prompt">
-            {isLogin
-              ? "Don't have an account?"
-              : 'Already have an account?'}{' '}
-            <button
-              type="button"
-              className="text-button"
-              onClick={() => switchMode(!isLogin)}
-            >
-              {isLogin ? 'Register now' : 'Sign in'}
-            </button>
-          </p>
-
-          <p className="auth-disclaimer">
-            By continuing, you agree to use LearnSpace responsibly and follow
-            your institution's learning policies.
-          </p>
-        </div>
-      </section>
-    </main>
+    <BrowserRouter>
+      <Routes>
+        <Route
+          path="/"
+          element={<Navigate to={dashboardPath} replace />}
+        />
+        <Route
+          path="/login"
+          element={
+            user ? (
+              <Navigate to={dashboardPath} replace />
+            ) : (
+              <AuthPage mode="login" onAuthenticated={handleAuthenticated} />
+            )
+          }
+        />
+        <Route
+          path="/register"
+          element={
+            user ? (
+              <Navigate to={dashboardPath} replace />
+            ) : (
+              <AuthPage mode="register" onAuthenticated={handleAuthenticated} />
+            )
+          }
+        />
+        <Route
+          path="/student/*"
+          element={
+            <ProtectedRoute user={user} role="Student">
+              <StudentDashboard user={user} onLogout={handleLogout} />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/faculty/*"
+          element={
+            <ProtectedRoute user={user} role="Faculty">
+              <FacultyDashboard user={user} onLogout={handleLogout} />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="*" element={<Navigate to={dashboardPath} replace />} />
+      </Routes>
+    </BrowserRouter>
   )
 }
 

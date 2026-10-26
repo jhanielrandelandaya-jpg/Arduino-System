@@ -105,6 +105,22 @@ button {
   font-weight: 800;
 }
 
+.auth-brand {
+  gap: 13px;
+}
+
+.brand-pill {
+  padding: 3px 7px;
+  border: 1px solid rgb(255 255 255 / 20%);
+  border-radius: 5px;
+  color: #d8e8ff;
+  background: rgb(255 255 255 / 8%);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+}
+
 .visual-content {
   max-width: 490px;
   margin: 65px auto;
@@ -137,15 +153,66 @@ button {
   line-height: 1.8;
 }
 
+.visual-features {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  margin-top: 32px;
+}
+
+.visual-feature {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 13px 15px;
+  border: 1px solid rgb(255 255 255 / 11%);
+  border-radius: 13px;
+  background: rgb(255 255 255 / 5%);
+}
+
+.visual-feature-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  place-items: center;
+  border-radius: 10px;
+  color: #d8e8ff;
+  background: rgb(109 157 224 / 22%);
+}
+
+.visual-feature-faculty {
+  color: #c9f5ed;
+  background: rgb(86 200 189 / 18%);
+}
+
+.visual-feature div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.visual-feature strong {
+  color: #f4f8ff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.visual-feature span:not(.visual-feature-icon) {
+  color: #b9cbe3;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
 .visual-card {
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-top: 45px;
-  padding: 20px;
-  border: 1px solid rgb(255 255 255 / 15%);
-  border-radius: 16px;
-  background: rgb(255 255 255 / 8%);
+  margin-top: 18px;
+  padding: 16px 18px;
+  border: 1px solid rgb(255 255 255 / 13%);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 6%);
   backdrop-filter: blur(10px);
 }
 
@@ -173,8 +240,21 @@ button {
 }
 
 .visual-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
   color: #c0d0e7;
-  font-size: 12px;
+  font-size: 11px;
+}
+
+.visual-security {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #a9c9f5;
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .auth-panel {
@@ -253,11 +333,19 @@ button {
 
 .form-alert,
 .form-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   margin-bottom: 20px;
   padding: 12px 14px;
   border-radius: 9px;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.form-alert svg {
+  margin-top: 1px;
+  flex-shrink: 0;
 }
 
 .form-alert {
@@ -276,12 +364,164 @@ button {
   margin-bottom: 20px;
 }
 
-.form-group label {
+.form-group label,
+.form-label {
   display: block;
   margin-bottom: 9px;
   color: #344056;
   font-size: 13px;
   font-weight: 700;
+}
+
+.input-icon-wrap {
+  position: relative;
+}
+
+.input-icon-wrap > svg {
+  position: absolute;
+  top: 50%;
+  left: 14px;
+  color: #8a94a6;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.form-group .input-icon-wrap input {
+  padding-left: 41px;
+}
+
+.role-selector {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.role-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid #dfe4ed;
+  border-radius: 10px;
+  color: #344056;
+  background: #ffffff;
+  text-align: left;
+  transition: border-color 0.18s, background 0.18s, box-shadow 0.18s;
+}
+
+.role-option:hover {
+  border-color: #b9cbe6;
+  background: #fbfcff;
+}
+
+.role-option.is-active {
+  border-color: #4277c3;
+  background: #f3f8ff;
+  box-shadow: 0 0 0 3px rgb(66 119 195 / 9%);
+}
+
+.role-option-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  place-items: center;
+  border-radius: 8px;
+  color: #315f9f;
+  background: #eaf1fb;
+}
+
+.role-option-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.role-option-copy strong {
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.role-option-copy small {
+  color: #6b7689;
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+.role-option-check {
+  display: grid;
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+  place-items: center;
+  border: 1px solid #d7dfeb;
+  border-radius: 50%;
+  color: #ffffff;
+  background: #ffffff;
+}
+
+.role-option.is-active .role-option-check {
+  border-color: #315f9f;
+  background: #315f9f;
+}
+
+.password-strength {
+  margin-top: 9px;
+}
+
+.strength-bars {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.strength-bars span {
+  height: 4px;
+  border-radius: 999px;
+  background: #e6eaf1;
+  transition: background 0.2s;
+}
+
+.strength-bars span.is-filled {
+  background: #4b83d1;
+}
+
+.strength-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 5px;
+  color: #6b7689;
+  font-size: 9.5px;
+}
+
+.auth-trust {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 16px;
+  margin-top: 20px;
+  padding: 11px 12px;
+  border: 1px solid #e7ecf4;
+  border-radius: 9px;
+  color: #657186;
+  background: #f8fafd;
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.auth-trust span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.auth-trust svg {
+  color: #315f9f;
 }
 
 .form-group input,
@@ -326,13 +566,16 @@ button {
 .show-password {
   position: absolute;
   top: 50%;
-  right: 13px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   transform: translateY(-50%);
   padding: 5px;
   border: 0;
   color: #456eaa;
   background: transparent;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 700;
 }
 
@@ -454,6 +697,18 @@ button {
   }
 }
 
+@media (max-width: 520px) {
+  .role-selector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .visual-footer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+}
+
 @media (max-width: 420px) {
   .auth-panel {
     padding: 24px 18px;
@@ -465,5 +720,11 @@ button {
 
   .form-options {
     align-items: flex-start;
+  }
+
+  .auth-trust {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 7px;
   }
 }

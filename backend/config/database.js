@@ -67,9 +67,73 @@ const migrate = () => {
       FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS app_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS classes (
+      id TEXT PRIMARY KEY,
+      class_name TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      subject_code TEXT NOT NULL,
+      term TEXT,
+      academic_year TEXT,
+      description TEXT,
+      class_code TEXT,
+      status TEXT NOT NULL DEFAULT 'Published',
+      accent TEXT NOT NULL DEFAULT 'blue',
+      students INTEGER NOT NULL DEFAULT 0,
+      lessons INTEGER NOT NULL DEFAULT 0,
+      average REAL NOT NULL DEFAULT 0,
+      teacher_id TEXT NOT NULL,
+      created_date TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      FOREIGN KEY(teacher_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS quizzes (
+      id TEXT PRIMARY KEY,
+      quiz_title TEXT NOT NULL,
+      class_id TEXT NOT NULL,
+      subject_code TEXT,
+      due_date TEXT,
+      status TEXT NOT NULL DEFAULT 'Draft',
+      time_limit INTEGER NOT NULL DEFAULT 15,
+      max_score INTEGER NOT NULL DEFAULT 100,
+      passing INTEGER NOT NULL DEFAULT 75,
+      questions INTEGER NOT NULL DEFAULT 1,
+      attempts_allowed INTEGER NOT NULL DEFAULT 2,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      average REAL,
+      questions_json TEXT,
+      teacher_id TEXT NOT NULL,
+      created_date TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      FOREIGN KEY(class_id) REFERENCES classes(id) ON DELETE CASCADE,
+      FOREIGN KEY(teacher_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS activity_logs (
+      id TEXT PRIMARY KEY,
+      action TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT,
+      message TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      actor_name TEXT,
+      class_id TEXT,
+      quiz_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      FOREIGN KEY(actor_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_topics_subject ON topics(subject_id);
     CREATE INDEX IF NOT EXISTS idx_lessons_topic ON lessons(topic_id);
     CREATE INDEX IF NOT EXISTS idx_notes_user_topic ON student_notes(user_id, topic_id);
+    CREATE INDEX IF NOT EXISTS idx_classes_teacher ON classes(teacher_id);
+    CREATE INDEX IF NOT EXISTS idx_quizzes_class ON quizzes(class_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_logs(created_at DESC);
   `)
 }
 

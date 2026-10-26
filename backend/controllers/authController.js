@@ -88,7 +88,8 @@ const register = async (req, res) => {
       .get(user.id)
 
     return res.status(201).json({
-      message: 'Account created successfully. Please sign in.',
+      message: 'Account created successfully.',
+      token: createToken(created),
       user: sanitizeUser(created),
     })
   } catch (error) {
