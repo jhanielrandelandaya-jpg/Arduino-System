@@ -5,6 +5,7 @@ import {
   Route,
   Routes,
   useNavigate,
+  useSearchParams,
 } from 'react-router-dom'
 import DashboardLayout from '../layout/DashboardLayout.jsx'
 import ToastProvider from '../components/ToastProvider.jsx'
@@ -22,19 +23,10 @@ import {
   SectionHeader,
 } from '../components/DashboardUI.jsx'
 import { useToast } from '../context/toast.js'
-import {
-  initialStudentNotes,
-  learningProgress,
-  quizResults,
-  studentLessons,
-  studentLiveClasses,
-  studentQuizzes,
-  studentSubjects,
-} from '../data/sampleData.js'
 import { useLearningData } from '../hooks/useLearningData.js'
+import ClassroomWorkspace from './ClassroomWorkspace.jsx'
 import PresentationLibrary from '../presentation/PresentationLibrary.jsx'
 import PresentationViewer from '../presentation/PresentationViewer.jsx'
-import { ensurePresentationForLesson } from '../presentation/presentationStore.js'
 
 const NOTES_KEY = 'learnspace_student_notes'
 
@@ -69,10 +61,6 @@ const formatRelativeTime = (value) => {
 }
 
 const sharedQuizForStudent = (quiz, progress = {}) => {
-  const sample = studentQuizzes.find(
-    (item) => item.title.toLowerCase() === quiz.title.toLowerCase(),
-  )
-
   return {
     ...quiz,
     title: quiz.quizTitle,
@@ -82,20 +70,23 @@ const sharedQuizForStudent = (quiz, progress = {}) => {
     facultyStatus: quiz.status,
     status:
       progress.status ||
-      (quiz.status === 'Draft' ? 'Draft' : 'Available'),
-    attemptsUsed: progress.attemptsUsed || 0,
-    bestScore: progress.bestScore ?? null,
+      (quiz.status === 'Draft'
+        ? 'Draft'
+        : quiz.bestScore !== null && quiz.bestScore >= quiz.passing
+          ? 'Completed'
+          : quiz.attemptsUsed > 0
+            ? 'Retake available'
+            : 'Available'),
+    attemptsUsed: progress.attemptsUsed ?? quiz.attemptsUsed ?? 0,
+    bestScore: progress.bestScore ?? quiz.bestScore ?? null,
     due: quiz.dueDate || 'No deadline',
-    questionList:
-      quiz.questionList?.length > 0
-        ? quiz.questionList
-        : sample?.questionList || [],
+    questionList: quiz.questionList || [],
   }
 }
 
-const loadNotes = () => {
+const loadNotes = (userId) => {
   try {
-    const stored = window.localStorage.getItem(NOTES_KEY)
+    const stored = window.localStorage.getItem(`${NOTES_KEY}_${userId}`)
     if (stored) {
       const parsed = JSON.parse(stored)
       if (Array.isArray(parsed)) {
@@ -103,10 +94,10 @@ const loadNotes = () => {
       }
     }
   } catch {
-    // Fall back to the sample notes when storage is unavailable.
+    // Notes remain empty when browser storage is unavailable.
   }
 
-  return initialStudentNotes
+  return []
 }
 
 const getGreeting = () => {
@@ -116,37 +107,54 @@ const getGreeting = () => {
   return 'Good evening'
 }
 
-function StudentDashboard({ user, onLogout }) {
+function StudentDashboard({ user, onLogout, onUserUpdate }) {
   return (
     <ToastProvider>
-      <StudentWorkspace user={user} onLogout={onLogout} />
+      <StudentWorkspace
+        user={user}
+        onLogout={onLogout}
+        onUserUpdate={onUserUpdate}
+      />
     </ToastProvider>
   )
 }
 
-function StudentWorkspace({ user, onLogout }) {
+function StudentWorkspace({ user, onLogout, onUserUpdate }) {
   const {
     classes,
     quizzes: sharedQuizzes,
+    slides,
+    classwork,
     activity,
+    enrollClass,
+    getClassAnnouncements,
+    getClassPeople,
+    addAnnouncementComment,
+    getClasswork,
+    submitClasswork,
+    downloadClassworkAttachment,
+    downloadSubmissionFile,
+    submitQuizAttempt,
+    downloadSlideFile,
+    previewSlideFile,
     syncedAt,
     loading: sharedLoading,
-  } = useLearningData()
-  const [practiceQuizzes, setPracticeQuizzes] = useState([])
+    error,
+    refresh,
+  } = useLearningData({ role: 'Student' })
   const [quizProgress, setQuizProgress] = useState({})
-  const [results, setResults] = useState(quizResults)
+  const [results, setResults] = useState([])
 
   const quizzes = useMemo(
-    () => [
-      ...practiceQuizzes,
-      ...sharedQuizzes.map((quiz) =>
+    () =>
+      sharedQuizzes.map((quiz) =>
         sharedQuizForStudent(quiz, quizProgress[quiz.id]),
       ),
-    ],
-    [practiceQuizzes, quizProgress, sharedQuizzes],
+    [quizProgress, sharedQuizzes],
   )
 
-  const handleQuizComplete = (quiz, score, passed) => {
+  const handleQuizComplete = async (quiz, answers) => {
+    const result = await submitQuizAttempt(quiz.id, answers)
     const today = new Date().toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
@@ -159,29 +167,13 @@ function StudentWorkspace({ user, onLogout }) {
         quiz: quiz.title,
         subjectCode: quiz.subjectCode,
         date: today,
-        score,
+        score: result.score,
         passing: quiz.passing,
         attempt: 'Latest',
-        status: passed ? 'Passed' : 'Failed',
+        status: result.passed ? 'Passed' : 'Failed',
       },
       ...current,
     ])
-
-    if (quiz.type === 'Practice quiz') {
-      setPracticeQuizzes((current) =>
-        current.map((item) =>
-          item.id === quiz.id
-            ? {
-                ...item,
-                attemptsUsed: item.attemptsUsed + 1,
-                bestScore: Math.max(item.bestScore || 0, score),
-                status: 'Practice',
-              }
-            : item,
-        ),
-      )
-      return
-    }
 
     setQuizProgress((current) => {
       const previous = current[quiz.id] || {}
@@ -189,19 +181,21 @@ function StudentWorkspace({ user, onLogout }) {
         ...current,
         [quiz.id]: {
           attemptsUsed: (previous.attemptsUsed || quiz.attemptsUsed || 0) + 1,
-          bestScore: Math.max(previous.bestScore || 0, score),
-          status: passed ? 'Completed' : 'Retake available',
+          bestScore: Math.max(previous.bestScore || 0, result.score),
+          status: result.passed ? 'Completed' : 'Retake available',
         },
       }
     })
-  }
-
-  const handleCreatePractice = (quiz) => {
-    setPracticeQuizzes((current) => [quiz, ...current])
+    return result
   }
 
   return (
-    <DashboardLayout role="Student" user={user} onLogout={onLogout}>
+    <DashboardLayout
+      role="Student"
+      user={user}
+      onLogout={onLogout}
+      onUserUpdate={onUserUpdate}
+    >
       <Routes>
         <Route index element={<Navigate to="dashboard" replace />} />
         <Route
@@ -212,41 +206,145 @@ function StudentWorkspace({ user, onLogout }) {
               results={results}
               classes={classes}
               quizzes={quizzes}
+              slides={slides}
               activity={activity}
               syncedAt={syncedAt}
               syncing={sharedLoading}
+              loading={sharedLoading}
+              error={error}
+              onRetry={refresh}
+              onEnroll={enrollClass}
             />
           }
         />
         <Route
           path="subjects"
-          element={<StudentSubjects classes={classes} loading={sharedLoading} />}
-        />
-        <Route path="lessons" element={<StudentLessons />} />
-        <Route
-          path="presentations"
-          element={<PresentationLibrary role="student" />}
-        />
-        <Route
-          path="presentations/:presentationId"
-          element={<PresentationViewer role="Student" />}
-        />
-        <Route path="notes" element={<StudentNotes />} />
-        <Route
-          path="quizzes"
           element={
-            <StudentQuizzes
+            <StudentSubjects
+              classes={classes}
               quizzes={quizzes}
-              onCreatePractice={handleCreatePractice}
+              slides={slides}
+              loading={sharedLoading}
+              error={error}
+              onRetry={refresh}
+              onEnroll={enrollClass}
+              classwork={classwork}
+              getClasswork={getClasswork}
+              addAnnouncementComment={addAnnouncementComment}
+              submitClasswork={submitClasswork}
+              downloadClassworkAttachment={downloadClassworkAttachment}
+              downloadSubmissionFile={downloadSubmissionFile}
+              getAnnouncements={getClassAnnouncements}
+              getPeople={getClassPeople}
+              onDownloadFile={downloadSlideFile}
+              onPreviewFile={previewSlideFile}
               onQuizComplete={handleQuizComplete}
             />
           }
         />
+        <Route
+          path="lessons"
+          element={
+            <StudentLessons
+              slides={slides}
+              classes={classes}
+              onDownloadFile={downloadSlideFile}
+              onPreviewFile={previewSlideFile}
+            />
+          }
+        />
+        <Route
+          path="presentations"
+          element={<PresentationLibrary role="student" userId={user.id} />}
+        />
+        <Route
+          path="presentations/:presentationId"
+          element={<PresentationViewer role="Student" userId={user.id} />}
+        />
+        <Route path="notes" element={<StudentNotes userId={user.id} slides={slides} />} />
+        <Route path="quizzes" element={<Navigate to="subjects" replace />} />
         <Route path="results" element={<StudentResults results={results} />} />
-        <Route path="progress" element={<StudentProgress />} />
+        <Route
+          path="progress"
+          element={<StudentProgress classes={classes} quizzes={quizzes} slides={slides} />}
+        />
         <Route path="*" element={<Navigate to="dashboard" replace />} />
       </Routes>
     </DashboardLayout>
+  )
+}
+
+function StudentJoinClassForm({ onEnroll }) {
+  const notify = useToast()
+  const [classCode, setClassCode] = useState('')
+  const [joining, setJoining] = useState(false)
+  const [error, setError] = useState('')
+
+  const joinClass = async (event) => {
+    event.preventDefault()
+    setJoining(true)
+    setError('')
+
+    try {
+      await onEnroll(classCode.trim())
+      setClassCode('')
+      notify('Class joined successfully.')
+    } catch (joinError) {
+      setError(joinError.message)
+      notify(joinError.message, 'error')
+    } finally {
+      setJoining(false)
+    }
+  }
+
+  return (
+    <form className="lms-toolbar lms-student-join-form" onSubmit={joinClass}>
+      <Field
+        label="Join a class with a code"
+        hint="Enter the join code shared by your faculty."
+        className="lms-student-join-field"
+      >
+        <input
+          type="text"
+          value={classCode}
+          onChange={(event) => {
+            setClassCode(event.target.value)
+            setError('')
+          }}
+          placeholder="Enter class code"
+          aria-invalid={Boolean(error)}
+          aria-describedby={error ? 'student-join-error' : undefined}
+          disabled={joining}
+          required
+        />
+        {error && (
+          <span
+            id="student-join-error"
+            className="lms-inline-error"
+            role="alert"
+          >
+            {error}
+          </span>
+        )}
+      </Field>
+      <button
+        type="submit"
+        className="lms-btn lms-btn-primary"
+        disabled={joining || !classCode.trim()}
+      >
+        {joining ? (
+          <>
+            <span className="lms-search-spinner" />
+            Joining...
+          </>
+        ) : (
+          <>
+            <Icon name="plus" size={15} />
+            Join class
+          </>
+        )}
+      </button>
+    </form>
   )
 }
 
@@ -255,41 +353,36 @@ function StudentOverview({
   results,
   classes,
   quizzes,
+  slides,
   activity,
   syncedAt,
   syncing,
+  loading,
+  error,
+  onRetry,
+  onEnroll,
 }) {
-  const notify = useToast()
   const firstName = user.fullName.split(' ')[0]
   const activeClasses = classes.filter(
     (subject) => subject.status !== 'Archived',
   )
-  const assignedQuizzes = quizzes.filter(
-    (quiz) => quiz.type === 'Faculty quiz' && quiz.status !== 'Draft',
-  )
-  const completedLessons = studentLessons.filter(
-    (lesson) => lesson.status === 'completed',
-  ).length
-  const overallProgress = Math.round(
-    studentSubjects.reduce((total, subject) => total + subject.progress, 0) /
-      studentSubjects.length,
-  )
+  const assignedQuizzes = quizzes.filter((quiz) => quiz.type === 'Faculty quiz')
+  const completedLessons = 0
+  const overallProgress = quizzes.length
+    ? Math.min(100, Math.round((results.length / quizzes.length) * 100))
+    : 0
   const passedQuizzes = results.filter(
     (result) => result.status === 'Passed',
   ).length
-  const continueLearning = studentLessons
-    .filter((lesson) => lesson.status === 'current')
-    .slice(0, 2)
-    .map((lesson) => ({
-      lesson,
-      subject: studentSubjects.find(
-        (subject) => subject.id === lesson.subjectId,
-      ),
-    }))
-  const liveNow = studentLiveClasses.find(
-    (session) => session.status === 'live',
-  )
-  const totalLessons = studentLessons.length
+  const continueLearning = slides.slice(0, 2).map((slide) => ({
+    lesson: {
+      ...slide,
+      duration: `${slide.content.length} slides`,
+    },
+    subject: classes.find((subject) => subject.id === slide.classId),
+  }))
+  const liveNow = null
+  const totalLessons = slides.length
 
   return (
     <div className="lms-student-overview">
@@ -324,26 +417,32 @@ function StudentOverview({
         </div>
 
         <div className="lms-welcome-metrics">
-          <MetricRing
-            value={48}
-            display="12"
-            label="Day streak"
-            tone="blue"
-          />
-          <MetricRing
-            value={63}
-            display="126"
-            label="Hours"
-            tone="violet"
-          />
-          <MetricRing
-            value={72}
-            display="3.6k"
-            label="XP points"
-            tone="amber"
-          />
+          <MetricRing value={overallProgress} display={`${overallProgress}%`} label="Quiz progress" tone="blue" />
+          <MetricRing value={Math.min(100, completedLessons)} display={completedLessons} label="Lessons complete" tone="violet" />
+          <MetricRing value={Math.min(100, passedQuizzes)} display={passedQuizzes} label="Quizzes passed" tone="amber" />
         </div>
       </section>
+
+      {error && (
+        <div className="lms-dashboard-notice lms-dashboard-notice-error" role="alert">
+          <span>{error}</span>
+          <button
+            type="button"
+            className="lms-btn lms-btn-secondary lms-btn-sm"
+            onClick={() => onRetry()}
+            disabled={loading}
+          >
+            Try again
+          </button>
+        </div>
+      )}
+
+      {loading && (
+        <div className="lms-dashboard-data-state" role="status">
+          <span className="lms-search-spinner" />
+          Loading your classes and learning progress...
+        </div>
+      )}
 
       <section className="lms-student-section">
         <div className="lms-student-section-head">
@@ -352,12 +451,13 @@ function StudentOverview({
             <p>Every class your teachers have shared with you.</p>
           </div>
           <Link to="/student/subjects" className="lms-link">
-            View all classes
-            <Icon name="arrowRight" size={13} />
+            View all classes <Icon name="arrowRight" size={13} />
           </Link>
         </div>
 
-        <div className="lms-student-class-grid">
+        <StudentJoinClassForm onEnroll={onEnroll} />
+
+        <div className="lms-student-class-grid" aria-busy={loading}>
           {activeClasses.slice(0, 4).map((subject) => (
             <article className="lms-student-class-card" key={subject.id}>
               <div className="lms-student-class-top">
@@ -372,6 +472,11 @@ function StudentOverview({
                 >
                   {subject.status}
                 </Badge>
+                {subject.pendingClasswork > 0 && (
+                  <Badge tone="warning">
+                    {subject.pendingClasswork} pending
+                  </Badge>
+                )}
               </div>
               <span className="lms-student-class-subject">
                 {subject.subject}
@@ -393,19 +498,29 @@ function StudentOverview({
                 </span>
                 <span>Added {formatDate(subject.createdDate)}</span>
               </div>
+              <Link
+                to={`/student/subjects?classId=${encodeURIComponent(subject.id)}`}
+                className="lms-link lms-student-class-open"
+              >
+                Open class <Icon name="arrowRight" size={12} />
+              </Link>
             </article>
           ))}
         </div>
 
-        {activeClasses.length === 0 && (
+        {loading && activeClasses.length === 0 ? (
+          <p className="lms-cell-muted" role="status">
+            Loading your enrolled classes...
+          </p>
+        ) : activeClasses.length === 0 && !error ? (
           <div className="lms-card">
             <EmptyState
               icon="book"
-              title="No classes yet"
-              description="New classes created by your teacher will appear here automatically."
+              title="You haven’t joined any classes yet"
+              description="Enter the class code your teacher shared to join your first class."
             />
           </div>
-        )}
+        ) : null}
       </section>
 
       <section className="lms-student-section">
@@ -414,8 +529,8 @@ function StudentOverview({
             <h2>Assigned Quizzes</h2>
             <p>Published assessments from your classes, always up to date.</p>
           </div>
-          <Link to="/student/quizzes" className="lms-link">
-            Open all quizzes
+          <Link to="/student/subjects" className="lms-link">
+            Open classes
             <Icon name="arrowRight" size={13} />
           </Link>
         </div>
@@ -445,8 +560,11 @@ function StudentOverview({
               </div>
               <div className="lms-student-quiz-foot">
                 <span>{quiz.questions} questions · {quiz.passing}% to pass</span>
-                <Link to="/student/quizzes" className="lms-link">
-                  View quiz
+                <Link
+                  to={`/student/subjects?classId=${encodeURIComponent(quiz.classId)}`}
+                  className="lms-link"
+                >
+                  Open class
                   <Icon name="arrowRight" size={12} />
                 </Link>
               </div>
@@ -490,7 +608,7 @@ function StudentOverview({
                   </div>
                   <div className="lms-continue-body">
                     <div className="lms-continue-head">
-                      <span>{subject?.name}</span>
+                      <span>{subject?.className}</span>
                       <Badge tone="neutral">
                         <Icon name="clock" size={11} /> {lesson.duration}
                       </Badge>
@@ -537,60 +655,13 @@ function StudentOverview({
                   </tr>
                 </thead>
                 <tbody>
-                  {studentLiveClasses.map((session) => (
-                    <tr key={session.id}>
-                      <td>
-                        <div className="lms-live-class">
-                          <span
-                            className={`lms-live-icon ${
-                              session.status === 'live'
-                                ? 'is-live'
-                                : 'lms-tone-blue'
-                            }`}
-                          >
-                            <Icon name="monitor" size={15} />
-                          </span>
-                          <div>
-                            <strong>{session.title}</strong>
-                            <span>{session.subjectCode}</span>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="lms-cell-muted">{session.instructor}</td>
-                      <td>
-                        <span className="lms-live-time">
-                          <strong>{session.day}</strong>
-                          <span>{session.time}</span>
-                        </span>
-                      </td>
-                      <td>
-                        <div className="lms-live-action">
-                          {session.status === 'live' && (
-                            <Badge tone="danger" dot>
-                              LIVE
-                            </Badge>
-                          )}
-                          <button
-                            type="button"
-                            className={`lms-btn lms-btn-sm ${
-                              session.status === 'live'
-                                ? 'lms-btn-primary'
-                                : 'lms-btn-secondary'
-                            }`}
-                            onClick={() =>
-                              notify(
-                                session.status === 'live'
-                                  ? `Joining ${session.title} (demo).`
-                                  : `Reminder set for ${session.title}.`,
-                              )
-                            }
-                          >
-                            {session.status === 'live' ? 'Join Now' : 'Set Reminder'}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {!liveNow && (
+                  <tr>
+                    <td colSpan="4" className="lms-cell-muted">
+                      Live class schedules are not available yet.
+                    </td>
+                  </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -687,7 +758,10 @@ function StudentOverview({
 
           <StudentCalendar />
 
-          <LearningProgressWidget overall={overallProgress} />
+          <LearningProgressWidget
+            overall={overallProgress}
+            classes={activeClasses}
+          />
 
           <section className="lms-card lms-card-pad lms-goal-card">
             <div className="lms-goal-head">
@@ -788,27 +862,20 @@ function StudentCalendar() {
   )
 }
 
-function LearningProgressWidget({ overall }) {
+function LearningProgressWidget({ overall, classes }) {
   const [range, setRange] = useState('Weekly')
-  const segments =
-    range === 'Weekly'
-      ? [
-          { label: 'Computing', value: 60, color: '#2f6fed' },
-          { label: 'Mathematics', value: 24, color: '#7c4dd6' },
-          { label: 'Web systems', value: 16, color: '#0f8b83' },
-        ]
-      : [
-          { label: 'Computing', value: 52, color: '#2f6fed' },
-          { label: 'Mathematics', value: 28, color: '#7c4dd6' },
-          { label: 'Web systems', value: 20, color: '#0f8b83' },
-        ]
+  const segments = classes.map((learningClass, index) => ({
+    label: learningClass.subject,
+    value: classes.length ? Math.floor(100 / classes.length) : 0,
+    color: ['#2f6fed', '#7c4dd6', '#0f8b83', '#d18a2e'][index % 4],
+  }))
 
   return (
     <section className="lms-card lms-card-pad lms-progress-widget">
       <div className="lms-progress-widget-head">
         <div>
           <h2>Learning Progress</h2>
-          <p>Subject focus this period</p>
+          <p>{range} focus across your enrolled classes</p>
         </div>
         <select
           className="lms-select lms-select-sm"
@@ -845,9 +912,33 @@ function LearningProgressWidget({ overall }) {
   )
 }
 
-function StudentSubjects({ classes, loading }) {
-  const [search, setSearch] = useState('')
+function StudentSubjects({
+  classes,
+  quizzes,
+  slides,
+  classwork,
+  loading,
+  error,
+  onRetry,
+  onEnroll,
+  getAnnouncements,
+  getPeople,
+  addAnnouncementComment,
+  getClasswork,
+  submitClasswork,
+  downloadClassworkAttachment,
+  downloadSubmissionFile,
+  onDownloadFile,
+  onPreviewFile,
+  onQuizComplete,
+}) {
+  const notify = useToast()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [search, setSearch] = useState(() => searchParams.get('q') || '')
   const [semester, setSemester] = useState('All')
+  const [expandedClassId, setExpandedClassId] = useState(
+    () => searchParams.get('classId'),
+  )
 
   const activeClasses = classes.filter(
     (subject) => subject.status !== 'Archived',
@@ -865,6 +956,56 @@ function StudentSubjects({ classes, loading }) {
       semester === 'All' || subject.term === semester
     return matchesSearch && matchesSemester
   })
+  const handleQuizComplete = async (quiz, answers) => {
+    const result = await onQuizComplete(quiz, answers)
+    notify(
+      result.passed
+        ? `Quiz submitted. You passed with ${result.score}%.`
+        : `Quiz submitted. You scored ${result.score}%.`,
+      result.passed ? 'success' : 'error',
+    )
+    return result
+  }
+
+  const workspaceClass = activeClasses.find(
+    (subject) => subject.id === searchParams.get('classId'),
+  )
+
+  if (workspaceClass) {
+    const classQuizzes = quizzes.filter(
+      (quiz) => quiz.classId === workspaceClass.id,
+    )
+    return (
+      <ClassroomWorkspace
+        learningClass={workspaceClass}
+        role="Student"
+        slides={slides.filter((slide) => slide.classId === workspaceClass.id)}
+        quizzes={classQuizzes}
+        getAnnouncements={getAnnouncements}
+        getPeople={getPeople}
+        classwork={classwork.filter((item) => item.classId === workspaceClass.id)}
+        getClasswork={getClasswork}
+        addAnnouncementComment={addAnnouncementComment}
+        submitClasswork={submitClasswork}
+        downloadClassworkAttachment={downloadClassworkAttachment}
+        downloadSubmissionFile={downloadSubmissionFile}
+        onDownloadFile={onDownloadFile}
+        onPreviewFile={onPreviewFile}
+        onClose={() => {
+          const next = new URLSearchParams(searchParams)
+          next.delete('classId')
+          setSearchParams(next)
+          setExpandedClassId(null)
+        }}
+        studentQuizContent={
+          <StudentClassQuizzes
+            quizzes={classQuizzes}
+            onQuizComplete={handleQuizComplete}
+          />
+        }
+      />
+    )
+  }
 
   return (
     <>
@@ -879,6 +1020,22 @@ function StudentSubjects({ classes, loading }) {
           </Link>
         }
       />
+
+      <StudentJoinClassForm onEnroll={onEnroll} />
+
+      {error && (
+        <div className="lms-dashboard-notice lms-dashboard-notice-error" role="alert">
+          <span>{error}</span>
+          <button
+            type="button"
+            className="lms-btn lms-btn-secondary lms-btn-sm"
+            onClick={() => onRetry()}
+            disabled={loading}
+          >
+            Try again
+          </button>
+        </div>
+      )}
 
       <div className="lms-toolbar">
         <label className="lms-filter-input">
@@ -909,15 +1066,32 @@ function StudentSubjects({ classes, loading }) {
       </div>
 
       {loading && filtered.length === 0 ? (
-        <div className="lms-card lms-card-pad">
-          <p className="lms-cell-muted">Loading classes from your teachers...</p>
+        <div className="lms-card lms-card-pad lms-dashboard-data-state" role="status">
+          <span className="lms-search-spinner" />
+          Loading your enrolled classes...
         </div>
       ) : filtered.length === 0 ? (
         <div className="lms-card">
           <EmptyState
             icon="book"
-            title="No classes found"
-            description="Try a different search term, or wait for your teacher to create a class."
+            title={classes.length === 0 ? 'You haven’t joined any classes yet' : 'No classes found'}
+            description={
+              classes.length === 0
+                ? 'Enter the class code your teacher shared to join your first class.'
+                : 'Try a different search term or term filter.'
+            }
+            action={
+              error ? (
+                <button
+                  type="button"
+                  className="lms-btn lms-btn-secondary"
+                  onClick={() => onRetry()}
+                  disabled={loading}
+                >
+                  Try again
+                </button>
+              ) : null
+            }
           />
         </div>
       ) : (
@@ -936,6 +1110,11 @@ function StudentSubjects({ classes, loading }) {
                 >
                   {subject.status}
                 </Badge>
+                {subject.pendingClasswork > 0 && (
+                  <Badge tone="warning">
+                    {subject.pendingClasswork} pending
+                  </Badge>
+                )}
               </div>
               <span className="lms-student-class-subject">
                 {subject.subject}
@@ -960,15 +1139,40 @@ function StudentSubjects({ classes, loading }) {
                 <span>Added {formatDate(subject.createdDate)}</span>
               </div>
               <div className="lms-subject-card-stats">
-                <Link to="/student/lessons" className="lms-link">
-                  Open class
-                  <Icon name="arrowRight" size={12} />
+                <Link
+                  to={`/student/subjects?classId=${encodeURIComponent(subject.id)}`}
+                  className="lms-link"
+                >
+                  Open classroom <Icon name="arrowRight" size={12} />
                 </Link>
-                <Link to="/student/quizzes" className="lms-link">
-                  View quizzes
-                  <Icon name="arrowRight" size={12} />
+                <Link
+                  to={`/student/lessons?classId=${encodeURIComponent(subject.id)}`}
+                  className="lms-link"
+                >
+                  Open lessons <Icon name="arrowRight" size={12} />
                 </Link>
+                <button
+                  type="button"
+                  className="lms-link"
+                  onClick={() =>
+                    setExpandedClassId((current) =>
+                      current === subject.id ? null : subject.id,
+                    )
+                  }
+                  aria-expanded={expandedClassId === subject.id}
+                >
+                  {expandedClassId === subject.id
+                    ? 'Hide quizzes'
+                    : `Quizzes (${quizzes.filter((quiz) => quiz.classId === subject.id).length})`}
+                  <Icon name="chevronDown" size={12} />
+                </button>
               </div>
+              {expandedClassId === subject.id && (
+                <StudentClassQuizzes
+                  quizzes={quizzes.filter((quiz) => quiz.classId === subject.id)}
+                  onQuizComplete={handleQuizComplete}
+                />
+              )}
             </article>
           ))}
         </div>
@@ -977,26 +1181,62 @@ function StudentSubjects({ classes, loading }) {
   )
 }
 
-function StudentLessons() {
+function StudentLessons({
+  slides,
+  classes,
+  onDownloadFile,
+  onPreviewFile,
+}) {
   const notify = useToast()
-  const navigate = useNavigate()
-  const [selectedId, setSelectedId] = useState(
-    studentLessons.find((lesson) => lesson.status === 'current')?.id ||
-      studentLessons[0].id,
+  const lessons = slides.map((slide) => ({
+    ...slide,
+    subjectId: slide.classId,
+    content: slide.content
+      .map((item) => item.text || item.summary || '')
+      .filter(Boolean)
+      .join('\n\n'),
+    summary:
+      slide.content[0]?.summary ||
+      (slide.content[0]?.presentation?.fileName
+        ? 'File attachment available'
+        : 'Class lesson'),
+    duration: slide.content[0]?.presentation?.fileName
+      ? 'File attached'
+      : 'Lesson',
+    status: 'current',
+  }))
+  const [selectedId, setSelectedId] = useState('')
+  const requestedClassId = new URLSearchParams(window.location.search).get('classId')
+  const [subjectFilter, setSubjectFilter] = useState(
+    () => requestedClassId || 'All',
   )
-  const [subjectFilter, setSubjectFilter] = useState('All')
+  const activeSubjectFilter =
+    subjectFilter !== 'All' &&
+    classes.length > 0 &&
+    !classes.some((item) => item.id === subjectFilter)
+      ? 'All'
+      : subjectFilter
 
-  const visibleLessons = studentLessons.filter(
+  const visibleLessons = lessons.filter(
     (lesson) =>
-      subjectFilter === 'All' || lesson.subjectId === subjectFilter,
+      activeSubjectFilter === 'All' || lesson.subjectId === activeSubjectFilter,
   )
   const selected =
-    studentLessons.find((lesson) => lesson.id === selectedId) ||
+    lessons.find((lesson) => lesson.id === selectedId) ||
     visibleLessons[0]
-
-  const openPresentation = (lesson) => {
-    const presentation = ensurePresentationForLesson(lesson)
-    navigate(`/student/presentations/${presentation.id}`)
+  const downloadPresentation = async () => {
+    try {
+      await onDownloadFile(selected.id)
+    } catch (error) {
+      notify(error.message, 'error')
+    }
+  }
+  const openPresentation = async () => {
+    try {
+      await onPreviewFile(selected.id)
+    } catch (error) {
+      notify(error.message, 'error')
+    }
   }
 
   return (
@@ -1004,18 +1244,18 @@ function StudentLessons() {
       <PageHeader
         eyebrow="Lessons"
         title="Lessons & presentations"
-        description="Read lesson text, review uploaded presentations, and follow the topic sequence for each subject."
+        description="Read lesson text, open supported file previews, and download lesson attachments."
         actions={
           <select
             className="lms-select"
-            value={subjectFilter}
+            value={activeSubjectFilter}
             onChange={(event) => setSubjectFilter(event.target.value)}
             aria-label="Filter lessons by subject"
           >
             <option value="All">All subjects</option>
-            {studentSubjects.map((subject) => (
+            {classes.map((subject) => (
               <option value={subject.id} key={subject.id}>
-                {subject.code} · {subject.name}
+                {subject.subjectCode} · {subject.className}
               </option>
             ))}
           </select>
@@ -1037,13 +1277,6 @@ function StudentLessons() {
                   selected?.id === lesson.id ? 'is-active' : ''
                 } ${lesson.status === 'locked' ? 'is-locked' : ''}`}
                 onClick={() => {
-                  if (lesson.status === 'locked') {
-                    notify(
-                      'This topic is locked. Pass the required quiz to continue.',
-                      'error',
-                    )
-                    return
-                  }
                   setSelectedId(lesson.id)
                 }}
               >
@@ -1101,25 +1334,35 @@ function StudentLessons() {
 
             <div className="lms-lesson-content">{selected.content}</div>
 
-            {selected.presentation && (
+            {selected.presentation?.fileId && (
               <div className="lms-presentation-card">
                 <span className="lms-presentation-icon">
                   <Icon name="fileText" size={20} />
                 </span>
                 <div className="lms-presentation-copy">
-                  <strong>{selected.presentation.name}</strong>
+                  <strong>{selected.presentation.fileName}</strong>
                   <span>
-                    {selected.presentation.slides} slides ·{' '}
-                    {selected.presentation.size} · uploaded by faculty
+                    Uploaded by faculty. Preview supported files or download
+                    the attachment to open it with a compatible app.
                   </span>
                 </div>
+                {selected.presentation.previewable && (
+                  <button
+                    type="button"
+                    className="lms-btn lms-btn-secondary lms-btn-sm"
+                    onClick={openPresentation}
+                  >
+                    <Icon name="eye" size={14} />
+                    Preview file
+                  </button>
+                )}
                 <button
                   type="button"
                   className="lms-btn lms-btn-secondary lms-btn-sm"
-                  onClick={() => openPresentation(selected)}
+                  onClick={downloadPresentation}
                 >
-                  <Icon name="eye" size={14} />
-                  View slides
+                  <Icon name="download" size={14} />
+                  Download file
                 </button>
               </div>
             )}
@@ -1131,9 +1374,12 @@ function StudentLessons() {
                   Lesson completion is confirmed by passing the required quiz.
                 </span>
               </span>
-              <Link to="/student/quizzes" className="lms-btn lms-btn-primary lms-btn-sm">
+              <Link
+                to={`/student/subjects?classId=${encodeURIComponent(selected.subjectId)}`}
+                className="lms-btn lms-btn-primary lms-btn-sm"
+              >
                 <Icon name="quiz" size={14} />
-                Take lesson quiz
+                View class quizzes
               </Link>
             </div>
           </article>
@@ -1143,18 +1389,20 @@ function StudentLessons() {
   )
 }
 
-function StudentNotes() {
+function StudentNotes({ userId, slides }) {
   const notify = useToast()
-  const [notes, setNotes] = useState(loadNotes)
-  const [selectedId, setSelectedId] = useState(() => loadNotes()[0]?.id || null)
+  const [notes, setNotes] = useState(() => loadNotes(userId))
+  const [selectedId, setSelectedId] = useState(
+    () => loadNotes(userId)[0]?.id || null,
+  )
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(NOTES_KEY, JSON.stringify(notes))
+      window.localStorage.setItem(`${NOTES_KEY}_${userId}`, JSON.stringify(notes))
     } catch {
       // Notes still work for this session when storage is unavailable.
     }
-  }, [notes])
+  }, [notes, userId])
 
   const selected = notes.find((note) => note.id === selectedId) || notes[0]
 
@@ -1172,7 +1420,7 @@ function StudentNotes() {
   const createNote = () => {
     const note = {
       id: `note-${Date.now()}`,
-      topicId: studentLessons[0]?.id,
+      topicId: slides[0]?.id,
       title: 'Untitled note',
       body: '',
       updatedAt: new Date().toISOString(),
@@ -1225,7 +1473,7 @@ function StudentNotes() {
             </div>
             <div className="lms-notes-items">
               {notes.map((note) => {
-                const topic = studentLessons.find(
+                const topic = slides.find(
                   (lesson) => lesson.id === note.topicId,
                 )
                 return (
@@ -1277,7 +1525,7 @@ function StudentNotes() {
                   }
                   aria-label="Link note to topic"
                 >
-                  {studentLessons.map((lesson) => (
+                  {slides.map((lesson) => (
                     <option key={lesson.id} value={lesson.id}>
                       {lesson.subjectCode} · {lesson.title}
                     </option>
@@ -1314,83 +1562,33 @@ function StudentNotes() {
   )
 }
 
-function StudentQuizzes({ quizzes, onCreatePractice, onQuizComplete }) {
-  const notify = useToast()
-  const [tab, setTab] = useState('faculty')
-  const [creating, setCreating] = useState(false)
+function StudentClassQuizzes({ quizzes, onQuizComplete }) {
   const [activeQuiz, setActiveQuiz] = useState(null)
 
-  const filtered = quizzes.filter((quiz) =>
-    tab === 'faculty'
-      ? quiz.type === 'Faculty quiz'
-      : quiz.type === 'Practice quiz',
-  )
-
-  const handleComplete = (quiz, score, passed) => {
-    onQuizComplete(quiz, score, passed)
-    notify(
-      passed
-        ? `Quiz submitted. You passed with ${score}%.`
-        : `Quiz submitted. You scored ${score}%. Review and try again.`,
-      passed ? 'success' : 'error',
-    )
-  }
+  const filtered = quizzes
 
   return (
-    <>
-      <PageHeader
-        eyebrow="My quizzes"
-        title="Assessments & practice"
-        description="Answer faculty quizzes, keep track of attempts, and create your own practice sets."
-        actions={
-          <button
-            type="button"
-            className="lms-btn lms-btn-primary"
-            onClick={() => setCreating(true)}
-          >
-            <Icon name="plus" size={16} />
-            Create practice quiz
-          </button>
-        }
-      />
-
-      <div className="lms-toolbar">
-        <div className="lms-segmented" role="tablist" aria-label="Quiz type">
-          <button
-            type="button"
-            className={tab === 'faculty' ? 'is-active' : ''}
-            onClick={() => setTab('faculty')}
-          >
-            Faculty quizzes
-          </button>
-          <button
-            type="button"
-            className={tab === 'practice' ? 'is-active' : ''}
-            onClick={() => setTab('practice')}
-          >
-            My practice quizzes
-          </button>
+    <div className="lms-class-quiz-list">
+      <div className="lms-class-quiz-head">
+        <div>
+          <h4>Teacher-provided quizzes</h4>
+          <p>Take published quizzes for this class here.</p>
         </div>
-        <span className="lms-chip">
-          <Icon name="shield" size={13} />
-          Passing rule enforced
-        </span>
+        <Icon name="quiz" size={18} />
       </div>
-
-      <div className="lms-quiz-grid">
-        {filtered.map((quiz) => {
+      {filtered.length === 0 ? (
+        <p className="lms-cell-muted">No published quizzes in this class yet.</p>
+      ) : (
+        <div className="lms-quiz-grid">
+          {filtered.map((quiz) => {
           const attemptsLeft =
             quiz.attemptsAllowed - quiz.attemptsUsed
           const isDraft = quiz.status === 'Draft'
           const hasQuestions = quiz.questionList?.length > 0
           const isLocked =
-            quiz.type === 'Faculty quiz' &&
-            (quiz.status === 'Completed' ||
-              attemptsLeft <= 0 ||
-              isDraft ||
-              !hasQuestions)
+            quiz.status === 'Completed' || attemptsLeft <= 0 || !hasQuestions
 
-          return (
+            return (
             <article className="lms-quiz-card" key={quiz.id}>
               <div className="lms-quiz-card-head">
                 <span className="lms-quiz-card-icon lms-tone-violet">
@@ -1403,9 +1601,7 @@ function StudentQuizzes({ quizzes, onCreatePractice, onQuizComplete }) {
                       : quiz.status === 'Retake available' ||
                           quiz.status === 'Draft'
                         ? 'warning'
-                        : quiz.status === 'Practice'
-                          ? 'violet'
-                          : 'info'
+                        : 'info'
                   }
                   dot
                 >
@@ -1451,9 +1647,7 @@ function StudentQuizzes({ quizzes, onCreatePractice, onQuizComplete }) {
                       ? 'Questions coming soon'
                       : isLocked
                         ? 'No attempts remaining'
-                        : quiz.type === 'Practice quiz'
-                          ? 'Unlimited practice'
-                          : `${attemptsLeft} attempt${attemptsLeft === 1 ? '' : 's'} left`}
+                        : `${attemptsLeft} attempt${attemptsLeft === 1 ? '' : 's'} left`}
                 </span>
                 <button
                   type="button"
@@ -1472,205 +1666,28 @@ function StudentQuizzes({ quizzes, onCreatePractice, onQuizComplete }) {
                 </button>
               </div>
             </article>
-          )
-        })}
-      </div>
-
-      {creating && (
-        <PracticeQuizModal
-          onClose={() => setCreating(false)}
-          onCreate={(quiz) => {
-            onCreatePractice(quiz)
-            setCreating(false)
-            setTab('practice')
-            notify('Practice quiz created.')
-          }}
-        />
+            )
+          })}
+        </div>
       )}
 
       {activeQuiz && (
         <QuizPlayer
           quiz={activeQuiz}
           onClose={() => setActiveQuiz(null)}
-          onComplete={(quiz, score, passed) =>
-            handleComplete(quiz, score, passed)
-          }
+          onComplete={onQuizComplete}
         />
       )}
-    </>
-  )
-}
-
-function PracticeQuizModal({ onClose, onCreate }) {
-  const [title, setTitle] = useState('')
-  const [subjectId, setSubjectId] = useState(studentSubjects[0].id)
-  const [timeLimit, setTimeLimit] = useState(10)
-  const [passing, setPassing] = useState(70)
-  const [prompt, setPrompt] = useState('')
-  const [options, setOptions] = useState(['', '', '', ''])
-  const [answer, setAnswer] = useState(0)
-  const [error, setError] = useState('')
-
-  const handleSubmit = (event) => {
-    event.preventDefault()
-    if (!title.trim() || !prompt.trim()) {
-      setError('Add a quiz title and a question before saving.')
-      return
-    }
-    if (options.some((option) => !option.trim())) {
-      setError('Please complete all four answer options.')
-      return
-    }
-
-    const subject = studentSubjects.find((item) => item.id === subjectId)
-
-    onCreate({
-      id: `practice-${Date.now()}`,
-      title: title.trim(),
-      subjectId,
-      subjectCode: subject?.code || 'General',
-      type: 'Practice quiz',
-      questions: 1,
-      timeLimit: Number(timeLimit) || 10,
-      maxScore: 100,
-      passing: Number(passing) || 70,
-      attemptsAllowed: 99,
-      attemptsUsed: 0,
-      bestScore: null,
-      due: 'No deadline',
-      status: 'Practice',
-      questionList: [
-        {
-          id: 'practice-q1',
-          prompt: prompt.trim(),
-          options: options.map((option) => option.trim()),
-          answer,
-        },
-      ],
-    })
-  }
-
-  return (
-    <Modal
-      title="Create a practice quiz"
-      description="Build a quick self-check for any subject. Practice quizzes do not affect your official grade."
-      onClose={onClose}
-      size="lg"
-      footer={
-        <>
-          <button type="button" className="lms-btn lms-btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            type="submit"
-            form="practice-quiz-form"
-            className="lms-btn lms-btn-primary"
-          >
-            <Icon name="plus" size={15} />
-            Save practice quiz
-          </button>
-        </>
-      }
-    >
-      <form id="practice-quiz-form" onSubmit={handleSubmit}>
-        {error && (
-          <div className="lms-completion-note" style={{ marginBottom: 14, color: '#b33131', background: '#fdf3f3', borderColor: '#f1cccc' }}>
-            <Icon name="alert" size={15} />
-            <span>{error}</span>
-          </div>
-        )}
-
-        <div className="lms-form-grid">
-          <Field label="Quiz title" className="lms-field-full">
-            <input
-              type="text"
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="e.g. Binary numbers quick check"
-              required
-            />
-          </Field>
-          <Field label="Subject">
-            <select
-              value={subjectId}
-              onChange={(event) => setSubjectId(event.target.value)}
-            >
-              {studentSubjects.map((subject) => (
-                <option key={subject.id} value={subject.id}>
-                  {subject.code} · {subject.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Time limit (minutes)">
-            <input
-              type="number"
-              min="1"
-              max="60"
-              value={timeLimit}
-              onChange={(event) => setTimeLimit(event.target.value)}
-            />
-          </Field>
-          <Field label="Passing percentage">
-            <input
-              type="number"
-              min="1"
-              max="100"
-              value={passing}
-              onChange={(event) => setPassing(event.target.value)}
-            />
-          </Field>
-          <Field label="Question" className="lms-field-full">
-            <input
-              type="text"
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              placeholder="Write your practice question"
-              required
-            />
-          </Field>
-          {options.map((option, index) => (
-            <Field
-              key={index}
-              label={`Option ${String.fromCharCode(65 + index)}`}
-            >
-              <input
-                type="text"
-                value={option}
-                onChange={(event) =>
-                  setOptions((current) =>
-                    current.map((item, itemIndex) =>
-                      itemIndex === index ? event.target.value : item,
-                    ),
-                  )
-                }
-                placeholder={`Answer choice ${String.fromCharCode(65 + index)}`}
-                required
-              />
-            </Field>
-          ))}
-          <Field label="Correct answer">
-            <select
-              value={answer}
-              onChange={(event) => setAnswer(Number(event.target.value))}
-            >
-              {options.map((option, index) => (
-                <option key={index} value={index}>
-                  Option {String.fromCharCode(65 + index)}
-                  {option ? ` — ${option}` : ''}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-      </form>
-    </Modal>
+    </div>
   )
 }
 
 function QuizPlayer({ quiz, onClose, onComplete }) {
+  const notify = useToast()
   const [answers, setAnswers] = useState({})
   const [submitted, setSubmitted] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [result, setResult] = useState(null)
   const [remaining, setRemaining] = useState(Number(quiz.timeLimit) * 60)
   const questionList = quiz.questionList || []
 
@@ -1686,21 +1703,21 @@ function QuizPlayer({ quiz, onClose, onComplete }) {
     return () => window.clearTimeout(timeout)
   }, [remaining, submitted])
 
-  const correctCount = questionList.filter(
-    (question) => answers[question.id] === question.answer,
-  ).length
-  const score =
-    questionList.length > 0
-      ? Math.round((correctCount / questionList.length) * 100)
-      : 0
-  const passed = score >= quiz.passing
   const answeredCount = Object.keys(answers).length
   const minutes = Math.floor(remaining / 60)
   const seconds = String(remaining % 60).padStart(2, '0')
 
-  const handleSubmit = () => {
-    setSubmitted(true)
-    onComplete(quiz, score, passed)
+  const handleSubmit = async () => {
+    setSubmitting(true)
+    try {
+      const submission = await onComplete(quiz, answers)
+      setResult(submission)
+      setSubmitted(true)
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -1722,24 +1739,25 @@ function QuizPlayer({ quiz, onClose, onComplete }) {
             <button
               type="button"
               className="lms-btn lms-btn-primary"
+              disabled={submitting}
               onClick={handleSubmit}
             >
               <Icon name="check" size={15} />
-              Submit quiz
+              {submitting ? 'Submitting...' : 'Submit quiz'}
             </button>
           </>
         )
       }
     >
       {submitted ? (
-        <div className={`lms-result-box ${passed ? '' : 'is-failed'}`}>
-          <Icon name={passed ? 'award' : 'alert'} size={28} />
-          <strong>{score}%</strong>
+        <div className={`lms-result-box ${result?.passed ? '' : 'is-failed'}`}>
+          <Icon name={result?.passed ? 'award' : 'alert'} size={28} />
+          <strong>{result?.score}%</strong>
           <h3 style={{ margin: '2px 0 4px' }}>
-            {passed ? 'Assessment passed' : 'Keep practicing'}
+            {result?.passed ? 'Assessment passed' : 'Review your answers'}
           </h3>
           <p>
-            You answered {correctCount} of {questionList.length} questions
+            You answered {result?.correctCount} of {result?.questionCount} questions
             correctly. The passing score is {quiz.passing}%.
           </p>
         </div>
@@ -1761,29 +1779,90 @@ function QuizPlayer({ quiz, onClose, onComplete }) {
               <h3>
                 <span>{index + 1}.</span> {question.prompt}
               </h3>
-              <div className="lms-answer-list">
-                {question.options.map((option, optionIndex) => (
-                  <label
-                    className="lms-answer-option"
-                    key={`${question.id}-${optionIndex}`}
-                  >
-                    <input
-                      type="radio"
-                      name={question.id}
-                      checked={answers[question.id] === optionIndex}
-                      onChange={() =>
-                        setAnswers((current) => ({
-                          ...current,
-                          [question.id]: optionIndex,
-                        }))
-                      }
-                    />
-                    <span>
-                      {String.fromCharCode(65 + optionIndex)}. {option}
-                    </span>
-                  </label>
-                ))}
-              </div>
+              {(question.type === 'short_answer' || question.type === 'paragraph') ? (
+                question.type === 'paragraph' ? (
+                  <textarea
+                    value={answers[question.id] || ''}
+                    onChange={(event) =>
+                      setAnswers((current) => ({
+                        ...current,
+                        [question.id]: event.target.value,
+                      }))
+                    }
+                    aria-label={`Answer question ${index + 1}`}
+                  />
+                ) : (
+                  <input
+                    type="text"
+                    value={answers[question.id] || ''}
+                    onChange={(event) =>
+                      setAnswers((current) => ({
+                        ...current,
+                        [question.id]: event.target.value,
+                      }))
+                    }
+                    aria-label={`Answer question ${index + 1}`}
+                  />
+                )
+              ) : question.type === 'dropdown' ? (
+                <select
+                  value={answers[question.id] ?? ''}
+                  onChange={(event) =>
+                    setAnswers((current) => ({
+                      ...current,
+                      [question.id]: event.target.value,
+                    }))
+                  }
+                  aria-label={`Answer question ${index + 1}`}
+                >
+                  <option value="">Select an answer</option>
+                  {question.options.map((option, optionIndex) => (
+                    <option key={`${question.id}-${optionIndex}`} value={optionIndex}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="lms-answer-list">
+                  {(question.options || []).map((option, optionIndex) => (
+                    <label
+                      className="lms-answer-option"
+                      key={`${question.id}-${optionIndex}`}
+                    >
+                      <input
+                        type={question.type === 'checkboxes' ? 'checkbox' : 'radio'}
+                        name={question.id}
+                        checked={
+                          question.type === 'checkboxes'
+                            ? (answers[question.id] || []).includes(optionIndex)
+                            : String(answers[question.id]) === String(optionIndex)
+                        }
+                        onChange={(event) => {
+                          if (question.type !== 'checkboxes') {
+                            setAnswers((current) => ({
+                              ...current,
+                              [question.id]: optionIndex,
+                            }))
+                            return
+                          }
+                          setAnswers((current) => {
+                            const selected = current[question.id] || []
+                            return {
+                              ...current,
+                              [question.id]: event.target.checked
+                                ? [...selected, optionIndex]
+                                : selected.filter((item) => item !== optionIndex),
+                            }
+                          })
+                        }}
+                      />
+                      <span>
+                        {String.fromCharCode(65 + optionIndex)}. {option}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </>
@@ -1920,18 +1999,70 @@ function StudentResults({ results }) {
   )
 }
 
-function StudentProgress() {
+function StudentProgress({ classes, quizzes, slides }) {
+  const learningProgress = classes.map((learningClass) => ({
+    subjectId: learningClass.id,
+    title: learningClass.className,
+    progress: 0,
+    topics: slides
+      .filter((slide) => slide.classId === learningClass.id)
+      .map((slide) => ({
+        id: slide.id,
+        title: slide.title,
+        requirement: 'Published class material',
+        state: 'current',
+      })),
+  }))
+  const studentSubjects = classes
   const [activeSubject, setActiveSubject] = useState(
-    learningProgress[0].subjectId,
+    learningProgress[0]?.subjectId || '',
   )
   const selected =
     learningProgress.find((item) => item.subjectId === activeSubject) ||
     learningProgress[0]
   const overall = Math.round(
     learningProgress.reduce((total, subject) => total + subject.progress, 0) /
-      learningProgress.length,
+      Math.max(learningProgress.length, 1),
   )
   const navigate = useNavigate()
+
+  if (!selected) {
+    return (
+      <>
+        <PageHeader
+          eyebrow="Learning progress"
+          title="Your learning path"
+          description="Enroll in a class to see its published learning materials."
+        />
+        <div className="lms-card">
+          <EmptyState
+            icon="trend"
+            title="No enrolled classes yet"
+            description="Learning materials will appear here after you join a class."
+          />
+        </div>
+      </>
+    )
+  }
+
+  if (!selected) {
+    return (
+      <>
+        <PageHeader
+          eyebrow="Learning progress"
+          title="Your learning path"
+          description="Enroll in a class to see its published learning materials."
+        />
+        <div className="lms-card">
+          <EmptyState
+            icon="trend"
+            title="No enrolled classes yet"
+            description="Progress and class materials will appear here after you join a class."
+          />
+        </div>
+      </>
+    )
+  }
 
   return (
     <>
@@ -1948,11 +2079,11 @@ function StudentProgress() {
             <div className="lms-progress-overview-copy">
               <h2>You are {overall}% through your active subjects</h2>
               <p>
-                Two topics are currently in progress. Keep completing lessons
-                and required quizzes to unlock the rest of your path.
+                Published class materials and quizzes are listed below. Progress
+                tracking will be available when submissions are supported.
               </p>
-              <Badge tone="success" dot>
-                On track
+              <Badge tone="neutral" dot>
+                Tracking unavailable
               </Badge>
             </div>
           </div>
@@ -1972,10 +2103,14 @@ function StudentProgress() {
             </span>
           </div>
           <div style={{ marginTop: 14 }}>
-            <ProgressBar label="Completed topics" value={68} tone="green" />
+            <ProgressBar label="Published slide decks" value={0} tone="green" />
           </div>
           <div style={{ marginTop: 10 }}>
-            <ProgressBar label="Quizzes passed" value={62} tone="violet" />
+            <ProgressBar
+              label="Published quizzes"
+              value={Math.min(100, quizzes.length)}
+              tone="violet"
+            />
           </div>
         </section>
       </div>
@@ -1991,7 +2126,7 @@ function StudentProgress() {
               }
               onClick={() => setActiveSubject(subject.subjectId)}
             >
-              {studentSubjects.find((item) => item.id === subject.subjectId)?.code}
+              {studentSubjects.find((item) => item.id === subject.subjectId)?.subjectCode}
             </button>
           ))}
         </div>

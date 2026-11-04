@@ -28,11 +28,12 @@ const formatDate = (value) => {
 export default function PresentationLibrary({
   role = 'faculty',
   subjects = [],
+  userId,
 }) {
   const navigate = useNavigate()
   const notify = useToast()
   const isFaculty = role === 'faculty'
-  const [decks, setDecks] = useState(loadPresentations)
+  const [decks, setDecks] = useState(() => loadPresentations(userId))
   const [search, setSearch] = useState('')
   const [subjectFilter, setSubjectFilter] = useState('All')
   const [createOpen, setCreateOpen] = useState(false)
@@ -84,21 +85,21 @@ export default function PresentationLibrary({
       subjectCode: subject?.code || draft.subjectCode || 'General',
       theme: draft.theme,
     })
-    addPresentation(presentation)
+    addPresentation(presentation, userId)
     setCreateOpen(false)
     navigate(`/faculty/presentations/${presentation.id}/edit`)
   }
 
   const handleDuplicate = (deck) => {
-    copyPresentation(deck)
-    setDecks(loadPresentations())
+    copyPresentation(deck, userId)
+    setDecks(loadPresentations(userId))
     notify('Presentation duplicated.')
   }
 
   const handleDelete = (deck) => {
     if (!window.confirm(`Delete "${deck.title}"? This cannot be undone.`)) return
-    removePresentation(deck.id)
-    setDecks(loadPresentations())
+    removePresentation(deck.id, userId)
+    setDecks(loadPresentations(userId))
     notify('Presentation deleted.', 'error')
   }
 

@@ -5,9 +5,9 @@ import { loadPresentation } from './presentationStore.js'
 import { SlideCanvas } from './SlideCanvas.jsx'
 import './Presentation.css'
 
-export default function PresentationViewer({ role = 'Student' }) {
+export default function PresentationViewer({ role = 'Student', userId }) {
   const { presentationId } = useParams()
-  const [deck] = useState(() => loadPresentation(presentationId))
+  const [deck] = useState(() => loadPresentation(presentationId, userId))
   const [index, setIndex] = useState(0)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const shellRef = useRef(null)

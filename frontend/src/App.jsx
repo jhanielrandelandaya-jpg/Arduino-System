@@ -113,6 +113,10 @@ function App() {
     setUser(null)
   }
 
+  const handleUserUpdate = (nextUser) => {
+    setUser((current) => (current ? { ...current, ...nextUser } : nextUser))
+  }
+
   if (checkingSession) {
     return (
       <main className="auth-loading">
@@ -155,7 +159,11 @@ function App() {
           path="/student/*"
           element={
             <ProtectedRoute user={user} role="Student">
-              <StudentDashboard user={user} onLogout={handleLogout} />
+              <StudentDashboard
+                user={user}
+                onLogout={handleLogout}
+                onUserUpdate={handleUserUpdate}
+              />
             </ProtectedRoute>
           }
         />
@@ -163,7 +171,11 @@ function App() {
           path="/faculty/*"
           element={
             <ProtectedRoute user={user} role="Faculty">
-              <FacultyDashboard user={user} onLogout={handleLogout} />
+              <FacultyDashboard
+                user={user}
+                onLogout={handleLogout}
+                onUserUpdate={handleUserUpdate}
+              />
             </ProtectedRoute>
           }
         />

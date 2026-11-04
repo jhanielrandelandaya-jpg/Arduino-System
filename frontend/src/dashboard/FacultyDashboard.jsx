@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import {
   Link,
   Navigate,
@@ -20,38 +20,74 @@ import {
   SectionHeader,
 } from '../components/DashboardUI.jsx'
 import { useToast } from '../context/toast.js'
-import {
-  facultyLessons,
-  facultyReports,
-  facultyStudents,
-  facultySubjects,
-} from '../data/sampleData.js'
 import { useLearningData } from '../hooks/useLearningData.js'
 import PresentationEditor from '../presentation/PresentationEditor.jsx'
 import PresentationLibrary from '../presentation/PresentationLibrary.jsx'
 import PresentationViewer from '../presentation/PresentationViewer.jsx'
 import { ensurePresentationForLesson } from '../presentation/presentationStore.js'
+import ClassroomWorkspace from './ClassroomWorkspace.jsx'
 
-function FacultyDashboard({ user, onLogout }) {
+function FacultyDashboard({ user, onLogout, onUserUpdate }) {
   return (
     <ToastProvider>
-      <FacultyWorkspace user={user} onLogout={onLogout} />
+      <FacultyWorkspace
+        user={user}
+        onLogout={onLogout}
+        onUserUpdate={onUserUpdate}
+      />
     </ToastProvider>
   )
 }
 
-function FacultyWorkspace({ user, onLogout }) {
+function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
   const notify = useToast()
+  const [pendingLessonIds, setPendingLessonIds] = useState(() => new Set())
   const {
     classes: subjects,
     quizzes,
+    students,
+    slides,
+    classwork,
+    createSlide,
+    updateSlide,
     createClass,
     updateClass,
     deleteClass,
     createQuiz,
     updateQuiz,
-  } = useLearningData()
-  const [lessons, setLessons] = useState(facultyLessons)
+    getClassStudents,
+    getClassQuizAttempts,
+    getClassAnnouncements,
+    getClassPeople,
+    createClassAnnouncement,
+    deleteClassAnnouncement,
+    getClasswork,
+    createClasswork,
+    deleteClasswork,
+    uploadClassworkAttachment,
+    downloadClassworkAttachment,
+    getClassworkSubmissions,
+    gradeClassworkSubmission,
+    downloadSubmissionFile,
+    uploadSlideFile,
+    loading,
+    error,
+    refresh,
+  } = useLearningData({ role: 'Faculty' })
+  const lessons = slides.map((slide) => ({
+    id: slide.id,
+    subjectId: slide.classId,
+    subjectCode: slide.subjectCode,
+    title: slide.title,
+    summary: slide.content[0]?.summary || '',
+    content: slide.content[0]?.text || '',
+    presentation: slide.content[0]?.presentation || null,
+    type: slide.content[0]?.presentation?.fileName
+      ? 'File attachment + text'
+      : 'Text lesson',
+    status: slide.status,
+    updated: slide.updatedAt,
+  }))
 
   const saveSubject = async (subject) => {
     const isEditing = subjects.some((item) => item.id === subject.id)
@@ -81,33 +117,67 @@ function FacultyWorkspace({ user, onLogout }) {
     }
   }
 
-  const saveLesson = (lesson) => {
-    setLessons((current) => {
-      const exists = current.some((item) => item.id === lesson.id)
-      return exists
-        ? current.map((item) => (item.id === lesson.id ? lesson : item))
-        : [lesson, ...current]
-    })
-    notify(
-      lessons.some((item) => item.id === lesson.id)
-        ? 'Lesson updated successfully.'
-        : 'Lesson created successfully.',
-    )
+  const saveLesson = async (lesson) => {
+    const exists =
+      slides.some((item) => item.id === lesson.id) ||
+      pendingLessonIds.has(lesson.id)
+    const payload = {
+      classId: lesson.subjectId,
+      title: lesson.title,
+      content: [
+        {
+          summary: lesson.summary,
+          text: lesson.content,
+          presentation: lesson.presentation,
+        },
+      ],
+      status: lesson.status,
+    }
+
+    let savedSlideId = lesson.id
+    try {
+      if (exists) {
+        await updateSlide(lesson.id, payload)
+      } else {
+        const result = await createSlide(payload)
+        savedSlideId = result.slide.id
+        setPendingLessonIds((current) => new Set(current).add(savedSlideId))
+      }
+      if (lesson.presentationFile) {
+        await uploadSlideFile(savedSlideId, lesson.presentationFile)
+      }
+      setPendingLessonIds((current) => {
+        const next = new Set(current)
+        next.delete(savedSlideId)
+        return next
+      })
+      notify(
+        lesson.presentationFile
+          ? 'Lesson and file attachment saved for enrolled students.'
+          : exists
+            ? 'Lesson updated successfully.'
+            : 'Lesson created successfully.',
+      )
+    } catch (error) {
+      notify(error.message, 'error')
+      if (!exists && savedSlideId) {
+        error.lessonId = savedSlideId
+      }
+      throw error
+    }
   }
 
-  const toggleLessonStatus = (id) => {
-    setLessons((current) =>
-      current.map((lesson) =>
-        lesson.id === id
-          ? {
-              ...lesson,
-              status: lesson.status === 'Published' ? 'Draft' : 'Published',
-              updated: 'Just now',
-            }
-          : lesson,
-      ),
-    )
-    notify('Lesson visibility updated.')
+  const toggleLessonStatus = async (id) => {
+    const lesson = lessons.find((item) => item.id === id)
+    if (!lesson) return
+    try {
+      await updateSlide(id, {
+        status: lesson.status === 'Published' ? 'Draft' : 'Published',
+      })
+      notify('Lesson visibility updated.')
+    } catch (error) {
+      notify(error.message, 'error')
+    }
   }
 
   const saveQuiz = async (quiz) => {
@@ -130,7 +200,12 @@ function FacultyWorkspace({ user, onLogout }) {
   }
 
   return (
-    <DashboardLayout role="Faculty" user={user} onLogout={onLogout}>
+    <DashboardLayout
+      role="Faculty"
+      user={user}
+      onLogout={onLogout}
+      onUserUpdate={onUserUpdate}
+    >
       <Routes>
         <Route index element={<Navigate to="dashboard" replace />} />
         <Route
@@ -141,6 +216,10 @@ function FacultyWorkspace({ user, onLogout }) {
               subjects={subjects}
               lessons={lessons}
               quizzes={quizzes}
+              students={students}
+              loading={loading}
+              error={error}
+              onRetry={refresh}
             />
           }
         />
@@ -149,8 +228,25 @@ function FacultyWorkspace({ user, onLogout }) {
           element={
             <SubjectManagement
               subjects={subjects}
+              slides={slides}
+              quizzes={quizzes}
               onSave={saveSubject}
               onDelete={deleteSubject}
+              onViewStudents={getClassStudents}
+              onViewScores={getClassQuizAttempts}
+              getAnnouncements={getClassAnnouncements}
+              getPeople={getClassPeople}
+              createAnnouncement={createClassAnnouncement}
+              deleteAnnouncement={deleteClassAnnouncement}
+              classwork={classwork}
+              getClasswork={getClasswork}
+              createClasswork={createClasswork}
+              deleteClasswork={deleteClasswork}
+              uploadClassworkAttachment={uploadClassworkAttachment}
+              downloadClassworkAttachment={downloadClassworkAttachment}
+              getClassworkSubmissions={getClassworkSubmissions}
+              gradeClassworkSubmission={gradeClassworkSubmission}
+              downloadSubmissionFile={downloadSubmissionFile}
             />
           }
         />
@@ -162,20 +258,27 @@ function FacultyWorkspace({ user, onLogout }) {
               subjects={subjects}
               onSave={saveLesson}
               onToggleStatus={toggleLessonStatus}
+              userId={user.id}
             />
           }
         />
         <Route
           path="presentations"
-          element={<PresentationLibrary role="faculty" subjects={subjects} />}
+          element={
+            <PresentationLibrary
+              role="faculty"
+              subjects={subjects}
+              userId={user.id}
+            />
+          }
         />
         <Route
           path="presentations/:presentationId/edit"
-          element={<PresentationEditor />}
+          element={<PresentationEditor userId={user.id} />}
         />
         <Route
           path="presentations/:presentationId/present"
-          element={<PresentationViewer role="Faculty" />}
+          element={<PresentationViewer role="Faculty" userId={user.id} />}
         />
         <Route
           path="quizzes"
@@ -187,8 +290,11 @@ function FacultyWorkspace({ user, onLogout }) {
             />
           }
         />
-        <Route path="performance" element={<StudentPerformance />} />
-        <Route path="reports" element={<FacultyReports />} />
+        <Route
+          path="performance"
+          element={<StudentPerformance students={students} subjects={subjects} />}
+        />
+        <Route path="reports" element={<FacultyReports subjects={subjects} />} />
         <Route path="*" element={<Navigate to="dashboard" replace />} />
       </Routes>
     </DashboardLayout>
@@ -209,17 +315,23 @@ const classCodeFor = (subject) => {
   return `${code}-${hash}`
 }
 
-function FacultyOverview({ subjects, lessons, quizzes }) {
+function FacultyOverview({
+  subjects,
+  lessons,
+  quizzes,
+  students,
+  loading,
+  error,
+  onRetry,
+}) {
   const navigate = useNavigate()
-  const students = subjects.reduce((total, subject) => total + subject.students, 0)
+  const studentCount = students.length
   const submissions = quizzes.reduce((total, quiz) => total + quiz.attempts, 0)
   const publishedLessons = lessons.filter(
     (lesson) => lesson.status === 'Published',
   ).length
-  const passedReports = facultyReports.filter(
-    (report) => report.status === 'Passed',
-  ).length
-  const passRate = Math.round((passedReports / facultyReports.length) * 100)
+  const passedReports = 0
+  const passRate = 0
   const completionRate = Math.round(
     (publishedLessons / Math.max(lessons.length, 1)) * 100,
   )
@@ -234,21 +346,7 @@ function FacultyOverview({ subjects, lessons, quizzes }) {
       'violet',
   }))
 
-  const recentSubmissions = facultyStudents.slice(0, 4).map((student) => {
-    const quiz =
-      quizzes.find(
-        (item) => item.subjectCode === student.subjectCode && item.attempts > 0,
-      ) || quizzes.find((item) => item.subjectCode === student.subjectCode)
-
-    return { ...student, test: quiz?.title || 'Subject quiz' }
-  })
-
-  const enrollmentTimes = [
-    '2 hours ago',
-    'Yesterday',
-    '2 days ago',
-    '3 days ago',
-  ]
+  const recentSubmissions = []
 
   return (
     <div className="lms-faculty-overview">
@@ -276,6 +374,27 @@ function FacultyOverview({ subjects, lessons, quizzes }) {
         }
       />
 
+      {error && (
+        <div className="lms-dashboard-notice lms-dashboard-notice-error" role="alert">
+          <span>{error}</span>
+          <button
+            type="button"
+            className="lms-btn lms-btn-secondary lms-btn-sm"
+            onClick={() => onRetry()}
+            disabled={loading}
+          >
+            Try again
+          </button>
+        </div>
+      )}
+
+      {loading && (
+        <div className="lms-dashboard-data-state" role="status">
+          <span className="lms-search-spinner" />
+          Loading your classes and dashboard...
+        </div>
+      )}
+
       <div className="lms-faculty-kpis">
         {[
           {
@@ -301,7 +420,7 @@ function FacultyOverview({ subjects, lessons, quizzes }) {
           },
           {
             label: 'Total Students',
-            value: students,
+            value: studentCount,
             meta: 'Enrolled across your classes',
             icon: 'users',
             tone: 'green',
@@ -327,7 +446,7 @@ function FacultyOverview({ subjects, lessons, quizzes }) {
             <span>Pass Rate</span>
             <strong>{passRate}%</strong>
             <p>
-              {passedReports} of {facultyReports.length} learners above passing
+              {passedReports} graded submissions above passing
             </p>
           </div>
           <span className="lms-faculty-mini-icon">
@@ -373,53 +492,63 @@ function FacultyOverview({ subjects, lessons, quizzes }) {
             }
           />
 
-          <div className="lms-table-wrap">
-            <table className="lms-table lms-faculty-table lms-tests-table">
-              <thead>
-                <tr>
-                  <th>Test name</th>
-                  <th>Created</th>
-                  <th>Submissions</th>
-                  <th aria-label="Open test" />
-                </tr>
-              </thead>
-              <tbody>
-                {recentTests.map((test) => (
-                  <tr key={test.id}>
-                    <td>
-                      <div className="lms-faculty-test">
-                        <span
-                          className={`lms-faculty-test-cover lms-tone-${test.tone}`}
-                        >
-                          <Icon name="fileText" size={16} />
-                        </span>
-                        <div>
-                          <strong>{test.title}</strong>
-                          <span>{test.subjectCode}</span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="lms-cell-muted">{test.created}</td>
-                    <td>
-                      <span className="lms-faculty-submissions">
-                        <strong>{test.attempts}</strong> submissions
-                      </span>
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="lms-icon-btn"
-                        onClick={() => navigate('/faculty/quizzes')}
-                        aria-label={`Open ${test.title}`}
-                      >
-                        <Icon name="arrowRight" size={14} />
-                      </button>
-                    </td>
+          {loading && recentTests.length === 0 ? (
+            <p className="lms-cell-muted" role="status">Loading assessments...</p>
+          ) : recentTests.length > 0 ? (
+            <div className="lms-table-wrap">
+              <table className="lms-table lms-faculty-table lms-tests-table">
+                <thead>
+                  <tr>
+                    <th>Test name</th>
+                    <th>Created</th>
+                    <th>Submissions</th>
+                    <th aria-label="Open test" />
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {recentTests.map((test) => (
+                    <tr key={test.id}>
+                      <td>
+                        <div className="lms-faculty-test">
+                          <span
+                            className={`lms-faculty-test-cover lms-tone-${test.tone}`}
+                          >
+                            <Icon name="fileText" size={16} />
+                          </span>
+                          <div>
+                            <strong>{test.title}</strong>
+                            <span>{test.subjectCode}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="lms-cell-muted">{test.created}</td>
+                      <td>
+                        <span className="lms-faculty-submissions">
+                          <strong>{test.attempts}</strong> submissions
+                        </span>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="lms-icon-btn"
+                          onClick={() => navigate('/faculty/quizzes')}
+                          aria-label={`Open ${test.title}`}
+                        >
+                          <Icon name="arrowRight" size={14} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState
+              icon="quiz"
+              title="No tests yet"
+              description="Create your first quiz to start collecting submissions."
+            />
+          )}
         </section>
 
         <section className="lms-card lms-card-pad lms-faculty-panel">
@@ -434,30 +563,40 @@ function FacultyOverview({ subjects, lessons, quizzes }) {
             }
           />
 
-          <div className="lms-faculty-class-list">
-            {subjects.slice(0, 4).map((subject) => (
-              <Link
-                to="/faculty/subjects"
-                className="lms-faculty-class"
-                key={subject.id}
-              >
-                <span
-                  className={`lms-faculty-class-icon lms-tone-${subject.accent || 'violet'}`}
+          {loading && subjects.length === 0 ? (
+            <p className="lms-cell-muted" role="status">Loading your classes...</p>
+          ) : subjects.length > 0 ? (
+            <div className="lms-faculty-class-list">
+              {subjects.slice(0, 4).map((subject) => (
+                <Link
+                  to={`/faculty/subjects?classId=${encodeURIComponent(subject.id)}`}
+                  className="lms-faculty-class"
+                  key={subject.id}
                 >
-                  <Icon name="book" size={17} />
-                </span>
-                <span className="lms-faculty-class-copy">
-                  <strong>{subject.name}</strong>
-                  <span>
-                    {subject.code} · {subject.students} students
+                  <span
+                    className={`lms-faculty-class-icon lms-tone-${subject.accent || 'violet'}`}
+                  >
+                    <Icon name="book" size={17} />
                   </span>
-                </span>
-                <span className="lms-faculty-code">
-                  {classCodeFor(subject)}
-                </span>
-              </Link>
-            ))}
-          </div>
+                  <span className="lms-faculty-class-copy">
+                    <strong>{subject.name}</strong>
+                    <span>
+                      {subject.code} · {subject.students} students
+                    </span>
+                  </span>
+                  <span className="lms-faculty-code">
+                    {classCodeFor(subject)}
+                  </span>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              icon="book"
+              title="No classes yet"
+              description="Create a class to share lessons and quizzes with students."
+            />
+          )}
         </section>
       </div>
 
@@ -474,44 +613,54 @@ function FacultyOverview({ subjects, lessons, quizzes }) {
             }
           />
 
-          <div className="lms-table-wrap">
-            <table className="lms-table lms-faculty-table lms-submission-table">
-              <thead>
-                <tr>
-                  <th>Student</th>
-                  <th>Test</th>
-                  <th>Score</th>
-                  <th>Submitted</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentSubmissions.map((student) => (
-                  <tr key={student.id}>
-                    <td>
-                      <div className="lms-faculty-student">
-                        <Avatar name={student.name} size="sm" />
-                        <div>
-                          <strong>{student.name}</strong>
-                          <span>@{student.username}</span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="lms-cell-muted">{student.test}</td>
-                    <td>
-                      <span
-                        className={`lms-faculty-score ${
-                          student.average >= 75 ? 'is-pass' : 'is-fail'
-                        }`}
-                      >
-                        {student.average}%
-                      </span>
-                    </td>
-                    <td className="lms-cell-muted">{student.lastActive}</td>
+          {loading && recentSubmissions.length === 0 ? (
+            <p className="lms-cell-muted" role="status">Loading submissions...</p>
+          ) : recentSubmissions.length > 0 ? (
+            <div className="lms-table-wrap">
+              <table className="lms-table lms-faculty-table lms-submission-table">
+                <thead>
+                  <tr>
+                    <th>Student</th>
+                    <th>Test</th>
+                    <th>Score</th>
+                    <th>Submitted</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {recentSubmissions.map((student) => (
+                    <tr key={student.id}>
+                      <td>
+                        <div className="lms-faculty-student">
+                          <Avatar name={student.name} size="sm" />
+                          <div>
+                            <strong>{student.name}</strong>
+                            <span>@{student.username}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="lms-cell-muted">{student.test}</td>
+                      <td>
+                        <span
+                          className={`lms-faculty-score ${
+                            student.average >= 75 ? 'is-pass' : 'is-fail'
+                          }`}
+                        >
+                          {student.average}%
+                        </span>
+                      </td>
+                      <td className="lms-cell-muted">{student.lastActive}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState
+              icon="fileText"
+              title="No submissions yet"
+              description="Student quiz attempts will appear here once they start answering."
+            />
+          )}
         </section>
 
         <section className="lms-card lms-card-pad lms-faculty-panel">
@@ -526,30 +675,113 @@ function FacultyOverview({ subjects, lessons, quizzes }) {
             }
           />
 
-          <div className="lms-faculty-enrollment-list">
-            {facultyStudents.slice(0, 4).map((student, index) => (
-              <div className="lms-faculty-enrollment" key={student.id}>
-                <Avatar name={student.name} size="sm" />
-                <div className="lms-faculty-enrollment-copy">
-                  <strong>{student.name}</strong>
-                  <span>Enrolled in {student.subjectCode}</span>
+          {loading && students.length === 0 ? (
+            <p className="lms-cell-muted" role="status">Loading enrollments...</p>
+          ) : students.length > 0 ? (
+            <div className="lms-faculty-enrollment-list">
+              {students.slice(0, 4).map((student) => (
+                <div className="lms-faculty-enrollment" key={student.id}>
+                  <Avatar name={student.name} size="sm" />
+                  <div className="lms-faculty-enrollment-copy">
+                    <strong>{student.name}</strong>
+                    <span>
+                      Enrolled in {student.classNames.join(', ') || 'your class'}
+                    </span>
+                  </div>
                 </div>
-                <time>{enrollmentTimes[index]}</time>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              icon="users"
+              title="No enrollments yet"
+              description="New students will appear here as they join your classes."
+            />
+          )}
         </section>
       </div>
     </div>
   )
 }
 
-function SubjectManagement({ subjects, onSave, onDelete }) {
-  const [searchParams] = useSearchParams()
-  const [search, setSearch] = useState('')
+function SubjectManagement({
+  subjects,
+  slides,
+  quizzes,
+  onSave,
+  onDelete,
+  onViewStudents,
+  onViewScores,
+  getAnnouncements,
+  getPeople,
+  createAnnouncement,
+  deleteAnnouncement,
+  classwork,
+  getClasswork,
+  createClasswork,
+  deleteClasswork,
+  uploadClassworkAttachment,
+  downloadClassworkAttachment,
+  getClassworkSubmissions,
+  gradeClassworkSubmission,
+  downloadSubmissionFile,
+}) {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [search, setSearch] = useState(() => searchParams.get('q') || '')
   const [editing, setEditing] = useState(() =>
     searchParams.get('create') === '1' ? {} : null,
   )
+  const [rosterClass, setRosterClass] = useState(null)
+  const [rosterStudents, setRosterStudents] = useState([])
+  const [rosterLoading, setRosterLoading] = useState(false)
+  const [rosterError, setRosterError] = useState('')
+  const [scoresClass, setScoresClass] = useState(null)
+  const [quizAttempts, setQuizAttempts] = useState([])
+  const [scoresLoading, setScoresLoading] = useState(false)
+  const [scoresError, setScoresError] = useState('')
+  const workspaceClass = subjects.find(
+    (subject) => subject.id === searchParams.get('classId'),
+  )
+
+  const openWorkspace = (learningClass) => {
+    const next = new URLSearchParams(searchParams)
+    next.set('classId', learningClass.id)
+    setSearchParams(next)
+  }
+
+  const closeWorkspace = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('classId')
+    setSearchParams(next)
+  }
+
+  const openRoster = async (learningClass) => {
+    setRosterClass(learningClass)
+    setRosterStudents([])
+    setRosterError('')
+    setRosterLoading(true)
+    try {
+      setRosterStudents(await onViewStudents(learningClass.id))
+    } catch (error) {
+      setRosterError(error.message)
+    } finally {
+      setRosterLoading(false)
+    }
+  }
+
+  const openScores = async (learningClass) => {
+    setScoresClass(learningClass)
+    setQuizAttempts([])
+    setScoresError('')
+    setScoresLoading(true)
+    try {
+      setQuizAttempts(await onViewScores(learningClass.id))
+    } catch (error) {
+      setScoresError(error.message)
+    } finally {
+      setScoresLoading(false)
+    }
+  }
 
   const filtered = subjects.filter((subject) =>
     `${subject.code} ${subject.name} ${subject.subject} ${subject.term} ${subject.academicYear}`
@@ -559,128 +791,193 @@ function SubjectManagement({ subjects, onSave, onDelete }) {
 
   return (
     <>
-      <PageHeader
-        eyebrow="Class management"
-        title="Manage your classes"
-        description="Create classes that appear instantly on the student dashboard, with their subject, term, and academic year."
-        actions={
-          <button
-            type="button"
-            className="lms-btn lms-btn-primary"
-            onClick={() => setEditing({})}
-          >
-            <Icon name="plus" size={16} />
-            Create new class
-          </button>
-        }
-      />
-
-      <div className="lms-toolbar">
-        <label className="lms-filter-input">
-          <Icon name="search" size={15} />
-          <input
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search class, subject, code, term, or academic year"
-          />
-        </label>
-        <span className="lms-chip">
-          <Icon name="book" size={13} />
-          {filtered.length} subject{filtered.length === 1 ? '' : 's'}
-        </span>
-      </div>
-
-      <div className="lms-table-wrap">
-        <table className="lms-table">
-          <thead>
-            <tr>
-              <th>Class</th>
-              <th>Term</th>
-              <th>Academic year</th>
-              <th>Students</th>
-              <th>Lessons</th>
-              <th>Quizzes</th>
-              <th>Average</th>
-              <th>Status</th>
-              <th aria-label="Actions" />
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((subject) => (
-              <tr key={subject.id}>
-                <td>
-                  <div className="lms-table-user">
-                    <span
-                      className={`lms-subject-code lms-tone-${subject.accent || 'blue'}`}
-                    >
-                      {subject.code}
-                    </span>
-                    <div>
-                      <strong>{subject.name}</strong>
-                      <span>{subject.subject || subject.term}</span>
-                    </div>
-                  </div>
-                </td>
-                <td className="lms-cell-muted">{subject.term}</td>
-                <td className="lms-cell-muted">{subject.academicYear}</td>
-                <td className="lms-cell-strong">{subject.students}</td>
-                <td className="lms-cell-muted">{subject.lessons}</td>
-                <td className="lms-cell-muted">{subject.quizzes}</td>
-                <td>
-                  <span className="lms-score">
-                    {subject.average}%
-                    <span className="lms-score-bar">
-                      <span
-                        style={{
-                          width: `${subject.average}%`,
-                          background:
-                            subject.average >= 80 ? '#16825f' : '#d18a2e',
-                        }}
-                      />
-                    </span>
-                  </span>
-                </td>
-                <td>
-                  <Badge
-                    tone={subject.status === 'Published' ? 'success' : 'neutral'}
-                    dot
-                  >
-                    {subject.status}
-                  </Badge>
-                </td>
-                <td>
-                  <div className="lms-table-actions">
-                    <button
-                      type="button"
-                      className="lms-icon-btn"
-                      onClick={() => setEditing(subject)}
-                      aria-label={`Edit ${subject.code}`}
-                    >
-                      <Icon name="edit" size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      className="lms-icon-btn"
-                      onClick={() => onDelete(subject.id)}
-                      aria-label={`Delete ${subject.code}`}
-                    >
-                      <Icon name="trash" size={14} />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {filtered.length === 0 && (
-        <EmptyState
-          icon="book"
-          title="No subjects found"
-          description="Try a different search term or add a new subject."
+      {workspaceClass ? (
+        <ClassroomWorkspace
+          learningClass={workspaceClass}
+          role="Faculty"
+          slides={slides.filter((slide) => slide.classId === workspaceClass.id)}
+          quizzes={quizzes.filter((quiz) => quiz.classId === workspaceClass.id)}
+          getAnnouncements={getAnnouncements}
+          getPeople={getPeople}
+          createAnnouncement={createAnnouncement}
+          deleteAnnouncement={deleteAnnouncement}
+          classwork={classwork.filter((item) => item.classId === workspaceClass.id)}
+          getClasswork={getClasswork}
+          createClasswork={createClasswork}
+          deleteClasswork={deleteClasswork}
+          uploadClassworkAttachment={uploadClassworkAttachment}
+          downloadClassworkAttachment={downloadClassworkAttachment}
+          getClassworkSubmissions={getClassworkSubmissions}
+          gradeClassworkSubmission={gradeClassworkSubmission}
+          downloadSubmissionFile={downloadSubmissionFile}
+          getStudents={onViewStudents}
+          onViewScores={openScores}
+          onClose={closeWorkspace}
         />
+      ) : (
+        <>
+          <PageHeader
+            eyebrow="Class management"
+            title="Manage your classes"
+            description="Create classes that appear instantly on the student dashboard, with their subject, term, and academic year."
+            actions={
+              <button
+                type="button"
+                className="lms-btn lms-btn-primary"
+                onClick={() => setEditing({})}
+              >
+                <Icon name="plus" size={16} />
+                Create new class
+              </button>
+            }
+          />
+
+          <div className="lms-toolbar">
+            <label className="lms-filter-input">
+              <Icon name="search" size={15} />
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search classes, codes, or terms"
+                aria-label="Search classes"
+              />
+            </label>
+            <span className="lms-chip">
+              <Icon name="book" size={13} />
+              {filtered.length} subject{filtered.length === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          <div className="lms-table-wrap">
+            <table className="lms-table">
+              <thead>
+                <tr>
+                  <th>Class</th>
+                  <th>Term</th>
+                  <th>Academic year</th>
+                  <th>Students</th>
+                  <th>Lessons</th>
+                  <th>Quizzes</th>
+                  <th>Average</th>
+                  <th>Status</th>
+                  <th aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((subject) => (
+                  <tr key={subject.id}>
+                    <td>
+                      <div className="lms-table-user">
+                        <span
+                          className={`lms-subject-code lms-tone-${subject.accent || 'blue'}`}
+                        >
+                          {subject.code}
+                        </span>
+                        <div>
+                          <strong>{subject.name}</strong>
+                          <span>
+                            {subject.subject || subject.term} · Class code:{' '}
+                            {classCodeFor(subject)}
+                          </span>
+                          <button
+                            type="button"
+                            className="lms-link"
+                            onClick={() => openWorkspace(subject)}
+                          >
+                            Open classroom
+                          </button>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="lms-cell-muted">{subject.term}</td>
+                    <td className="lms-cell-muted">{subject.academicYear}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="lms-link"
+                        onClick={() => openRoster(subject)}
+                        aria-label={`View ${subject.students} students in ${subject.name}`}
+                      >
+                        {subject.students} · View students
+                      </button>
+                      <button
+                        type="button"
+                        className="lms-link"
+                        onClick={() => openScores(subject)}
+                        aria-label={`View quiz scores in ${subject.name}`}
+                      >
+                        View scores
+                      </button>
+                    </td>
+                    <td className="lms-cell-muted">{subject.lessons}</td>
+                    <td className="lms-cell-muted">{subject.quizzes}</td>
+                    <td>
+                      <span className="lms-score">
+                        {subject.average}%
+                        <span className="lms-score-bar">
+                          <span
+                            style={{
+                              width: `${subject.average}%`,
+                              background:
+                                subject.average >= 80 ? '#16825f' : '#d18a2e',
+                            }}
+                          />
+                        </span>
+                      </span>
+                    </td>
+                    <td>
+                      <Badge
+                        tone={subject.status === 'Published' ? 'success' : 'neutral'}
+                        dot
+                      >
+                        {subject.status}
+                      </Badge>
+                    </td>
+                    <td>
+                      <div className="lms-table-actions">
+                        <button
+                          type="button"
+                          className="lms-icon-btn"
+                          onClick={() => setEditing(subject)}
+                          aria-label={`Edit ${subject.code}`}
+                          title={`Edit ${subject.code}`}
+                        >
+                          <Icon name="edit" size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="lms-icon-btn lms-icon-btn-danger"
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                `Delete ${subject.code}? It will be removed from the student dashboard.`,
+                              )
+                            ) {
+                              onDelete(subject.id)
+                            }
+                          }}
+                          aria-label={`Delete ${subject.code}`}
+                          title={`Delete ${subject.code}`}
+                        >
+                          <Icon name="trash" size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {filtered.length === 0 && (
+            <EmptyState
+              icon="book"
+              title="No subjects found"
+              description="Try a different search term or add a new subject."
+            />
+          )}
+        </>
       )}
 
       {editing && (
@@ -692,6 +989,104 @@ function SubjectManagement({ subjects, onSave, onDelete }) {
             setEditing(null)
           }}
         />
+      )}
+
+      {rosterClass && (
+        <Modal
+          title={`${rosterClass.name} students`}
+          description={`${rosterStudents.length} actively enrolled student${rosterStudents.length === 1 ? '' : 's'} in ${rosterClass.code}.`}
+          onClose={() => setRosterClass(null)}
+          size="md"
+        >
+          {rosterLoading ? (
+            <p className="lms-cell-muted">Loading enrolled students...</p>
+          ) : rosterError ? (
+            <p role="alert" className="lms-cell-muted">{rosterError}</p>
+          ) : rosterStudents.length === 0 ? (
+            <EmptyState
+              icon="users"
+              title="No students enrolled"
+              description="Students who join this class will appear here."
+            />
+          ) : (
+            <div className="lms-faculty-enrollment-list">
+              {rosterStudents.map((student) => (
+                <div className="lms-faculty-enrollment" key={student.id}>
+                  <Avatar name={student.name} size="sm" />
+                  <div className="lms-faculty-enrollment-copy">
+                    <strong>{student.name}</strong>
+                    <span>@{student.username}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {scoresClass && (
+        <Modal
+          title={`${scoresClass.name} quiz scores`}
+          description="Scores from students actively enrolled in this class. Each row represents one submitted attempt."
+          onClose={() => setScoresClass(null)}
+          size="lg"
+        >
+          {scoresLoading ? (
+            <p className="lms-cell-muted">Loading quiz scores...</p>
+          ) : scoresError ? (
+            <p role="alert" className="lms-cell-muted">{scoresError}</p>
+          ) : quizAttempts.length === 0 ? (
+            <EmptyState
+              icon="chart"
+              title="No quiz submissions yet"
+              description="Scores will appear here after students submit a published quiz."
+            />
+          ) : (
+            <div className="lms-table-wrap">
+              <table className="lms-table">
+                <thead>
+                  <tr>
+                    <th>Student</th>
+                    <th>Quiz</th>
+                    <th>Score</th>
+                    <th>Result</th>
+                    <th>Submitted</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {quizAttempts.map((attempt) => (
+                    <tr key={attempt.id}>
+                      <td>
+                        <div className="lms-table-user">
+                          <Avatar name={attempt.studentName} size="sm" />
+                          <div>
+                            <strong>{attempt.studentName}</strong>
+                            <span>@{attempt.username}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td>{attempt.quizTitle}</td>
+                      <td>
+                        <strong>{attempt.score}%</strong>
+                        <span className="lms-cell-muted">
+                          {' '}({attempt.correctCount}/{attempt.questionCount})
+                        </span>
+                      </td>
+                      <td>
+                        <Badge tone={attempt.passed ? 'success' : 'warning'} dot>
+                          {attempt.passed ? 'Passed' : 'Not passed'}
+                        </Badge>
+                      </td>
+                      <td className="lms-cell-muted">
+                        {new Date(attempt.submittedAt).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Modal>
       )}
     </>
   )
@@ -823,11 +1218,16 @@ function SubjectFormModal({ subject, onClose, onSave }) {
   )
 }
 
-function LessonManagement({ lessons, subjects, onSave, onToggleStatus }) {
+function LessonManagement({ lessons, subjects, onSave, onToggleStatus, userId }) {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [search, setSearch] = useState('')
   const [subjectFilter, setSubjectFilter] = useState('All')
-  const [editing, setEditing] = useState(null)
+  const [editing, setEditing] = useState(() =>
+    searchParams.get('create') === '1'
+      ? { subjectId: searchParams.get('classId') || '' }
+      : null,
+  )
 
   const filtered = lessons.filter((lesson) => {
     const matchesSearch = `${lesson.title} ${lesson.subjectCode}`
@@ -839,7 +1239,7 @@ function LessonManagement({ lessons, subjects, onSave, onToggleStatus }) {
   })
 
   const openSlideStudio = (lesson) => {
-    const presentation = ensurePresentationForLesson(lesson)
+    const presentation = ensurePresentationForLesson(lesson, userId)
     navigate(`/faculty/presentations/${presentation.id}/edit`)
   }
 
@@ -848,12 +1248,14 @@ function LessonManagement({ lessons, subjects, onSave, onToggleStatus }) {
       <PageHeader
         eyebrow="Lesson management"
         title="Lessons & presentations"
-        description="Create lesson text, upload presentation files, write summaries, and control what students can access."
+        description="Create lesson text, attach files, write summaries, and control what students can access."
         actions={
           <button
             type="button"
             className="lms-btn lms-btn-primary"
-            onClick={() => setEditing({})}
+            onClick={() =>
+              setEditing({ subjectId: searchParams.get('classId') || '' })
+            }
           >
             <Icon name="plus" size={16} />
             New lesson
@@ -869,6 +1271,7 @@ function LessonManagement({ lessons, subjects, onSave, onToggleStatus }) {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search lesson title or subject code"
+            aria-label="Search lessons"
           />
         </label>
         <select
@@ -920,7 +1323,7 @@ function LessonManagement({ lessons, subjects, onSave, onToggleStatus }) {
                 <td className="lms-cell-muted">{lesson.subjectCode}</td>
                 <td className="lms-cell-muted">{lesson.type}</td>
                 <td className="lms-cell-muted">
-                  {lesson.presentation || 'No file uploaded'}
+                  {lesson.presentation?.fileName || 'No file uploaded'}
                 </td>
                 <td>
                   <Badge
@@ -962,6 +1365,7 @@ function LessonManagement({ lessons, subjects, onSave, onToggleStatus }) {
                       className="lms-icon-btn"
                       onClick={() => setEditing(lesson)}
                       aria-label={`Edit ${lesson.title}`}
+                      title={`Edit ${lesson.title}`}
                     >
                       <Icon name="edit" size={14} />
                     </button>
@@ -986,8 +1390,8 @@ function LessonManagement({ lessons, subjects, onSave, onToggleStatus }) {
           lesson={editing}
           subjects={subjects}
           onClose={() => setEditing(null)}
-          onSave={(lesson) => {
-            onSave(lesson)
+          onSave={async (lesson) => {
+            await onSave(lesson)
             setEditing(null)
           }}
         />
@@ -998,12 +1402,16 @@ function LessonManagement({ lessons, subjects, onSave, onToggleStatus }) {
 
 function LessonFormModal({ lesson, subjects, onClose, onSave }) {
   const isEditing = Boolean(lesson.id)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [persistedLessonId, setPersistedLessonId] = useState('')
   const [form, setForm] = useState({
     title: lesson.title || '',
     subjectId: lesson.subjectId || subjects[0]?.id || '',
     summary: lesson.summary || '',
     content: lesson.content || '',
-    presentation: lesson.presentation || '',
+    presentation: lesson.presentation || null,
+    presentationFile: null,
     status: lesson.status || 'Draft',
   })
 
@@ -1014,16 +1422,27 @@ function LessonFormModal({ lesson, subjects, onClose, onSave }) {
     (subject) => subject.id === form.subjectId,
   )
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault()
-    onSave({
-      ...lesson,
-      id: lesson.id || `lesson-${Date.now()}`,
-      ...form,
-      subjectCode: selectedSubject?.code || lesson.subjectCode || '',
-      type: form.presentation ? 'Presentation + text' : 'Text + summary',
-      updated: 'Just now',
-    })
+    setSaving(true)
+    setSaveError('')
+    try {
+      await onSave({
+        ...lesson,
+        id: lesson.id || persistedLessonId || `lesson-${Date.now()}`,
+        ...form,
+        subjectCode: selectedSubject?.code || lesson.subjectCode || '',
+        type: form.presentationFile || form.presentation
+          ? 'Presentation + text'
+          : 'Text + summary',
+        updated: 'Just now',
+      })
+    } catch (error) {
+      setSaveError(error.message || 'Could not save this lesson.')
+      if (error.lessonId) setPersistedLessonId(error.lessonId)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -1034,20 +1453,37 @@ function LessonFormModal({ lesson, subjects, onClose, onSave }) {
       size="lg"
       footer={
         <>
-          <button type="button" className="lms-btn lms-btn-secondary" onClick={onClose}>
+          <button
+            type="button"
+            className="lms-btn lms-btn-secondary"
+            onClick={onClose}
+            disabled={saving}
+          >
             Cancel
           </button>
           <button
             type="submit"
             form="lesson-form"
             className="lms-btn lms-btn-primary"
+            disabled={saving}
           >
-            {isEditing ? 'Save lesson' : 'Publish lesson'}
+            {saving
+              ? form.presentationFile
+                ? 'Uploading file...'
+                : 'Saving lesson...'
+              : isEditing
+                ? 'Save lesson'
+                : 'Publish lesson'}
           </button>
         </>
       }
     >
       <form id="lesson-form" className="lms-form-grid" onSubmit={handleSubmit}>
+        {saveError && (
+          <p className="lms-field-full" role="alert">
+            {saveError}
+          </p>
+        )}
         <Field label="Lesson title" className="lms-field-full">
           <input
             type="text"
@@ -1092,26 +1528,28 @@ function LessonFormModal({ lesson, subjects, onClose, onSave }) {
             value={form.content}
             onChange={(event) => update('content', event.target.value)}
             placeholder="Write the lesson content students will read..."
-            required
           />
         </Field>
         <Field
-          label="Presentation file"
-          hint="Upload a PPTX, PDF, or slide deck. Demo mode stores the file name only."
+          label="Lesson file attachment"
+          hint="Upload any file type (maximum 25 MB). Enrolled students can preview supported files or download it after the lesson is published."
           className="lms-field-full"
         >
           <input
             type="file"
-            accept=".ppt,.pptx,.pdf,.key"
             onChange={(event) =>
-              update('presentation', event.target.files?.[0]?.name || '')
+              update('presentationFile', event.target.files?.[0] || null)
             }
           />
         </Field>
-        {form.presentation && (
+        {(form.presentationFile || form.presentation?.fileName) && (
           <div className="lms-completion-note lms-field-full">
             <Icon name="checkCircle" size={15} />
-            <span>Selected presentation: {form.presentation}</span>
+            <span>
+              {form.presentationFile
+                ? `Selected file: ${form.presentationFile.name}`
+                : `Attached file: ${form.presentation.fileName}`}
+            </span>
           </div>
         )}
       </form>
@@ -1121,9 +1559,11 @@ function LessonFormModal({ lesson, subjects, onClose, onSave }) {
 
 function QuizManagement({ quizzes, subjects, onSave }) {
   const [searchParams] = useSearchParams()
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(() => searchParams.get('q') || '')
   const [editing, setEditing] = useState(() =>
-    searchParams.get('create') === '1' ? {} : null,
+    searchParams.get('create') === '1'
+      ? { subjectId: searchParams.get('classId') || '' }
+      : null,
   )
 
   const filtered = quizzes.filter((quiz) =>
@@ -1142,7 +1582,9 @@ function QuizManagement({ quizzes, subjects, onSave }) {
           <button
             type="button"
             className="lms-btn lms-btn-primary"
-            onClick={() => setEditing({})}
+            onClick={() =>
+              setEditing({ subjectId: searchParams.get('classId') || '' })
+            }
           >
             <Icon name="plus" size={16} />
             Create quiz
@@ -1158,6 +1600,7 @@ function QuizManagement({ quizzes, subjects, onSave }) {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search quiz or subject code"
+            aria-label="Search quizzes"
           />
         </label>
         <span className="lms-chip">
@@ -1250,11 +1693,13 @@ function QuizManagement({ quizzes, subjects, onSave }) {
 const blankQuestion = () => ({
   id: `question-${Date.now()}-${Math.random().toString(16).slice(2)}`,
   prompt: '',
+  type: 'multiple_choice',
   options: ['', '', '', ''],
   answer: 0,
 })
 
 function QuizFormModal({ quiz, subjects, onClose, onSave }) {
+  const notify = useToast()
   const isEditing = Boolean(quiz.id)
   const [form, setForm] = useState({
     title: quiz.title || '',
@@ -1267,7 +1712,23 @@ function QuizFormModal({ quiz, subjects, onClose, onSave }) {
   })
   const [questions, setQuestions] = useState(
     quiz.questionList?.length
-      ? quiz.questionList
+      ? quiz.questionList.map((question) => {
+          const type = question.type || 'multiple_choice'
+          return {
+            ...question,
+            type,
+            options: ['short_answer', 'paragraph'].includes(type)
+              ? []
+              : question.options || ['', '', '', ''],
+            answer:
+              type === 'checkboxes'
+                ? Array.isArray(question.answer)
+                  ? question.answer
+                  : []
+                : question.answer ??
+                  (['short_answer', 'paragraph'].includes(type) ? '' : 0),
+          }
+        })
       : [blankQuestion()],
   )
 
@@ -1297,9 +1758,16 @@ function QuizFormModal({ quiz, subjects, onClose, onSave }) {
 
   const handleSubmit = (event) => {
     event.preventDefault()
-    const validQuestions = questions.filter(
-      (question) => question.prompt.trim(),
+    const invalidCheckboxQuestion = questions.find(
+      (question) =>
+        question.type === 'checkboxes' &&
+        (!Array.isArray(question.answer) || question.answer.length === 0),
     )
+    if (invalidCheckboxQuestion) {
+      notify('Select at least one correct answer for each checkbox question.', 'error')
+      return
+    }
+    const validQuestions = questions.filter((question) => question.prompt.trim())
     const subject = subjects.find(
       (item) => item.id === form.subjectId,
     )
@@ -1425,7 +1893,7 @@ function QuizFormModal({ quiz, subjects, onClose, onSave }) {
             <div className="lms-section-head">
               <div>
                 <h2>Question {questionIndex + 1}</h2>
-                <p>Choose the correct option below.</p>
+                <p>Choose the question type and configure the expected answer.</p>
               </div>
               {questions.length > 1 && (
                 <button
@@ -1450,13 +1918,43 @@ function QuizFormModal({ quiz, subjects, onClose, onSave }) {
                   updateQuestion(questionIndex, { prompt: event.target.value })
                 }
                 placeholder="Write the question"
+                required
               />
             </Field>
-            <div className="lms-form-grid" style={{ marginTop: 12 }}>
-              {question.options.map((option, optionIndex) => (
+            <Field label="Question type" className="lms-field-full">
+              <select
+                value={question.type}
+                onChange={(event) => {
+                  const type = event.target.value
+                  updateQuestion(questionIndex, {
+                    type,
+                    options: type === 'short_answer'
+                      || type === 'paragraph'
+                      ? []
+                      : question.options.length
+                        ? question.options
+                        : ['', '', '', ''],
+                    answer: type === 'short_answer' || type === 'paragraph'
+                      ? ''
+                      : type === 'checkboxes'
+                        ? []
+                        : 0,
+                  })
+                }}
+              >
+                <option value="multiple_choice">Multiple choice</option>
+                <option value="dropdown">Dropdown</option>
+                <option value="checkboxes">Checkboxes (select all that apply)</option>
+                <option value="short_answer">Short answer</option>
+                <option value="paragraph">Paragraph</option>
+              </select>
+            </Field>
+            {question.type !== 'short_answer' && question.type !== 'paragraph' && (
+              <div className="lms-form-grid" style={{ marginTop: 12 }}>
+                {question.options.map((option, optionIndex) => (
                 <Field
                   key={`${question.id}-${optionIndex}`}
-                  label={`Option ${String.fromCharCode(65 + optionIndex)}${question.answer === optionIndex ? ' (correct)' : ''}`}
+                  label={`Option ${String.fromCharCode(65 + optionIndex)}`}
                 >
                   <input
                     type="text"
@@ -1465,27 +1963,71 @@ function QuizFormModal({ quiz, subjects, onClose, onSave }) {
                       updateOption(questionIndex, optionIndex, event.target.value)
                     }
                     placeholder={`Answer choice ${String.fromCharCode(65 + optionIndex)}`}
+                    required
                   />
                 </Field>
               ))}
-            </div>
-            <Field label="Correct answer" className="lms-field-full" style={{ marginTop: 12 }}>
-              <select
-                value={question.answer}
-                onChange={(event) =>
-                  updateQuestion(questionIndex, {
-                    answer: Number(event.target.value),
-                  })
-                }
+              </div>
+            )}
+            {question.type === 'checkboxes' ? (
+              <Field
+                label="Correct answers"
+                hint="Select every option students must choose."
+                className="lms-field-full"
               >
-                {question.options.map((option, optionIndex) => (
-                  <option key={`${question.id}-answer-${optionIndex}`} value={optionIndex}>
-                    Option {String.fromCharCode(65 + optionIndex)}
-                    {option ? ` — ${option}` : ''}
-                  </option>
-                ))}
-              </select>
-            </Field>
+                <div className="lms-form-grid">
+                  {question.options.map((option, optionIndex) => (
+                    <label key={`${question.id}-correct-${optionIndex}`}>
+                      <input
+                        type="checkbox"
+                        checked={question.answer.includes(optionIndex)}
+                        onChange={(event) => {
+                          const currentAnswers = question.answer
+                          const answer = event.target.checked
+                            ? [...currentAnswers, optionIndex]
+                            : currentAnswers.filter((value) => value !== optionIndex)
+                          updateQuestion(questionIndex, { answer })
+                        }}
+                      />
+                      {option || `Option ${String.fromCharCode(65 + optionIndex)}`}
+                    </label>
+                  ))}
+                </div>
+              </Field>
+            ) : question.type === 'short_answer' || question.type === 'paragraph' ? (
+              <Field
+                label="Expected answer"
+                hint="Answers are automatically checked without regard to letter case."
+                className="lms-field-full"
+              >
+                <input
+                  type="text"
+                  value={question.answer}
+                  onChange={(event) =>
+                    updateQuestion(questionIndex, { answer: event.target.value })
+                  }
+                  required
+                />
+              </Field>
+            ) : (
+              <Field label="Correct answer" className="lms-field-full" style={{ marginTop: 12 }}>
+                <select
+                  value={question.answer}
+                  onChange={(event) =>
+                    updateQuestion(questionIndex, {
+                      answer: Number(event.target.value),
+                    })
+                  }
+                >
+                  {question.options.map((option, optionIndex) => (
+                    <option key={`${question.id}-answer-${optionIndex}`} value={optionIndex}>
+                      Option {String.fromCharCode(65 + optionIndex)}
+                      {option ? ` — ${option}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
           </div>
         ))}
       </form>
@@ -1493,33 +2035,27 @@ function QuizFormModal({ quiz, subjects, onClose, onSave }) {
   )
 }
 
-function StudentPerformance() {
+function StudentPerformance({ students, subjects }) {
   const notify = useToast()
-  const [search, setSearch] = useState('')
+  const [searchParams] = useSearchParams()
+  const [search, setSearch] = useState(() => searchParams.get('q') || '')
   const [subjectFilter, setSubjectFilter] = useState('All')
 
-  const filtered = facultyStudents.filter((student) => {
+  const filtered = students.filter((student) => {
     const matchesSearch = `${student.name} ${student.username}`
       .toLowerCase()
       .includes(search.toLowerCase())
     const matchesSubject =
-      subjectFilter === 'All' || student.subjectCode === subjectFilter
+      subjectFilter === 'All' || student.subjectCodes.includes(subjectFilter)
     return matchesSearch && matchesSubject
   })
-  const atRisk = facultyStudents.filter(
-    (student) => student.status === 'At risk' || student.status === 'Needs support',
-  ).length
-  const average = Math.round(
-    facultyStudents.reduce((total, student) => total + student.average, 0) /
-      facultyStudents.length,
-  )
 
   return (
     <>
       <PageHeader
         eyebrow="Student performance"
-        title="Scores & quiz attempts"
-        description="Review individual student performance, quiz attempts, passing status, and recent activity."
+        title="Enrolled students"
+        description="View students enrolled in your classes. Student records from other faculty classes are not available here."
         actions={
           <button
             type="button"
@@ -1534,29 +2070,20 @@ function StudentPerformance() {
 
       <div className="lms-result-summary">
         <div className="lms-summary-tile">
-          <span>Students tracked</span>
-          <strong>{facultyStudents.length}</strong>
+          <span>Students enrolled</span>
+          <strong>{students.length}</strong>
         </div>
         <div className="lms-summary-tile">
-          <span>Class average</span>
-          <strong>{average}%</strong>
+          <span>Your classes</span>
+          <strong>{subjects.length}</strong>
         </div>
         <div className="lms-summary-tile">
-          <span>Needs support</span>
-          <strong>{atRisk}</strong>
+          <span>Classes with enrollment</span>
+          <strong>{subjects.filter((subject) => subject.students > 0).length}</strong>
         </div>
         <div className="lms-summary-tile">
-          <span>Pass rate</span>
-          <strong>
-            {Math.round(
-              (facultyStudents.filter(
-                (student) => student.average >= 75,
-              ).length /
-                facultyStudents.length) *
-                100,
-            )}
-            %
-          </strong>
+          <span>Performance records</span>
+          <strong>Not available</strong>
         </div>
       </div>
 
@@ -1568,6 +2095,7 @@ function StudentPerformance() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search student name or username"
+            aria-label="Search students"
           />
         </label>
         <select
@@ -1577,9 +2105,9 @@ function StudentPerformance() {
           aria-label="Filter by subject"
         >
           <option value="All">All subjects</option>
-          {facultySubjects.map((subject) => (
-            <option key={subject.id} value={subject.code}>
-              {subject.code}
+          {subjects.map((subject) => (
+            <option key={subject.id} value={subject.subjectCode}>
+              {subject.subjectCode}
             </option>
           ))}
         </select>
@@ -1590,68 +2118,23 @@ function StudentPerformance() {
           <thead>
             <tr>
               <th>Student</th>
-              <th>Subject</th>
-              <th>Attempts</th>
-              <th>Average</th>
-              <th>Passed</th>
-              <th>Last active</th>
-              <th>Status</th>
+              <th>Enrolled in</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((student, index) => (
+            {filtered.map((student) => (
               <tr key={student.id}>
                 <td>
                   <div className="lms-table-user">
-                    <Avatar
-                      name={student.name}
-                      tone={['blue', 'violet', 'teal', 'amber'][index % 4]}
-                    />
+                    <Avatar name={student.name} />
                     <div>
                       <strong>{student.name}</strong>
                       <span>@{student.username}</span>
                     </div>
                   </div>
                 </td>
-                <td className="lms-cell-muted">{student.subjectCode}</td>
-                <td className="lms-cell-strong">{student.attempts}</td>
                 <td>
-                  <span className="lms-score">
-                    {student.average}%
-                    <span className="lms-score-bar">
-                      <span
-                        style={{
-                          width: `${student.average}%`,
-                          background:
-                            student.average >= 80
-                              ? '#16825f'
-                              : student.average >= 70
-                                ? '#d18a2e'
-                                : '#c24141',
-                        }}
-                      />
-                    </span>
-                  </span>
-                </td>
-                <td className="lms-cell-muted">
-                  {student.passed}/{student.attempts}
-                </td>
-                <td className="lms-cell-muted">{student.lastActive}</td>
-                <td>
-                  <Badge
-                    tone={
-                      student.status === 'Excellent'
-                        ? 'violet'
-                        : student.status === 'On track'
-                          ? 'success'
-                          : student.status === 'Needs support'
-                            ? 'warning'
-                            : 'danger'
-                    }
-                    dot
-                  >
-                    {student.status}
-                  </Badge>
+                  {student.classNames.join(', ')}
                 </td>
               </tr>
             ))}
@@ -1662,8 +2145,8 @@ function StudentPerformance() {
       {filtered.length === 0 && (
         <EmptyState
           icon="users"
-          title="No students found"
-          description="Try a different name or subject filter."
+          title="No enrolled students found"
+          description="Students appear here after joining one of your classes."
         />
       )}
     </>
@@ -1672,30 +2155,14 @@ function StudentPerformance() {
 
 const csvEscape = (value) => `"${String(value).replaceAll('"', '""')}"`
 
-function FacultyReports() {
+function FacultyReports({ subjects }) {
   const notify = useToast()
+  const [searchParams] = useSearchParams()
   const [sortBy, setSortBy] = useState('surname')
   const [subjectFilter, setSubjectFilter] = useState('All')
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(() => searchParams.get('q') || '')
 
-  const rows = useMemo(() => {
-    const filtered = facultyReports.filter((report) => {
-      const matchesSubject =
-        subjectFilter === 'All' || report.subjectCode === subjectFilter
-      const matchesSearch = `${report.name} ${report.subjectCode}`
-        .toLowerCase()
-        .includes(search.toLowerCase())
-      return matchesSubject && matchesSearch
-    })
-
-    return [...filtered].sort((a, b) => {
-      if (sortBy === 'score') return b.score - a.score
-      if (sortBy === 'subject') {
-        return a.subjectCode.localeCompare(b.subjectCode)
-      }
-      return a.surname.localeCompare(b.surname)
-    })
-  }, [sortBy, subjectFilter, search])
+  const rows = []
 
   const average = Math.round(
     rows.reduce((total, report) => total + report.score, 0) /
@@ -1793,6 +2260,7 @@ function FacultyReports() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search student or subject"
+            aria-label="Search report rows"
           />
         </label>
         <select
@@ -1802,9 +2270,9 @@ function FacultyReports() {
           aria-label="Filter report by subject"
         >
           <option value="All">All subjects</option>
-          {facultySubjects.map((subject) => (
-            <option key={subject.id} value={subject.code}>
-              {subject.code}
+          {subjects.map((subject) => (
+            <option key={subject.id} value={subject.subjectCode}>
+              {subject.subjectCode}
             </option>
           ))}
         </select>

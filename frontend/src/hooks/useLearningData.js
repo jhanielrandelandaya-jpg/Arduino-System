@@ -14,9 +14,14 @@ const getToken = () => {
   }
 }
 
-const request = async (path, options = {}) => {
+const authHeaders = () => {
   const token = getToken()
-  const response = await fetch(`/api/learning${path}`, {
+  return token ? { Authorization: 'Bearer ' + token } : {}
+}
+
+const request = async (path, options = {}, basePath = '/api/learning') => {
+  const token = getToken()
+  const response = await fetch(`${basePath}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -42,9 +47,12 @@ export const signalLearningChange = () => {
   window.dispatchEvent(new Event('learnspace:learning-change'))
 }
 
-export function useLearningData({ pollInterval = 3000 } = {}) {
+export function useLearningData({ role, pollInterval = 3000 } = {}) {
   const [classes, setClasses] = useState([])
   const [quizzes, setQuizzes] = useState([])
+  const [slides, setSlides] = useState([])
+  const [students, setStudents] = useState([])
+  const [classwork, setClasswork] = useState([])
   const [activity, setActivity] = useState([])
   const [syncedAt, setSyncedAt] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -61,7 +69,8 @@ export function useLearningData({ pollInterval = 3000 } = {}) {
     }
 
     try {
-      const data = await request('/bootstrap')
+      const dashboardRole = role === 'Faculty' ? 'faculty' : 'student'
+      const data = await request(`/${dashboardRole}/dashboard`, {}, '/api')
 
       if (!mounted.current || requestId.current !== currentRequest) {
         return data
@@ -69,6 +78,9 @@ export function useLearningData({ pollInterval = 3000 } = {}) {
 
       setClasses(Array.isArray(data.classes) ? data.classes : [])
       setQuizzes(Array.isArray(data.quizzes) ? data.quizzes : [])
+      setSlides(Array.isArray(data.slides) ? data.slides : [])
+      setStudents(Array.isArray(data.students) ? data.students : [])
+      setClasswork(Array.isArray(data.classwork) ? data.classwork : [])
       setActivity(Array.isArray(data.activity) ? data.activity : [])
       setSyncedAt(data.syncedAt || new Date().toISOString())
       setError('')
@@ -83,7 +95,7 @@ export function useLearningData({ pollInterval = 3000 } = {}) {
         setLoading(false)
       }
     }
-  }, [])
+  }, [role])
 
   useEffect(() => {
     mounted.current = true
@@ -183,9 +195,320 @@ export function useLearningData({ pollInterval = 3000 } = {}) {
     [mutate],
   )
 
+  const submitQuizAttempt = useCallback(
+    (quizId, answers) =>
+      request(`/quizzes/${encodeURIComponent(quizId)}/attempts`, {
+        method: 'POST',
+        body: JSON.stringify({ answers }),
+      }),
+    [],
+  )
+
+  const createSlide = useCallback(
+    (payload) =>
+      mutate('/slides', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    [mutate],
+  )
+
+  const updateSlide = useCallback(
+    (id, payload) =>
+      mutate(`/slides/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    [mutate],
+  )
+
+  const deleteSlide = useCallback(
+    (id) => mutate(`/slides/${id}`, { method: 'DELETE' }),
+    [mutate],
+  )
+
+  const enrollClass = useCallback(
+    async (classCode) => {
+      const data = await request(
+        '/enrollments',
+        {
+          method: 'POST',
+          body: JSON.stringify({ classCode }),
+        },
+        '/api/student',
+      )
+      await refresh({ silent: true })
+      signalLearningChange()
+      return data
+    },
+    [refresh],
+  )
+
+  const getClassStudents = useCallback(async (classId) => {
+    const data = await request(
+      `/classes/${encodeURIComponent(classId)}/students`,
+      {},
+      '/api/faculty',
+    )
+    return Array.isArray(data.students) ? data.students : []
+  }, [])
+
+  const getClassQuizAttempts = useCallback(async (classId) => {
+    const data = await request(
+      `/classes/${encodeURIComponent(classId)}/quiz-attempts`,
+      {},
+      '/api/faculty',
+    )
+    return Array.isArray(data.attempts) ? data.attempts : []
+  }, [])
+
+  const getClassAnnouncements = useCallback(async (classId) => {
+    const data = await request(
+      `/classes/${encodeURIComponent(classId)}/announcements`,
+    )
+    return Array.isArray(data.announcements) ? data.announcements : []
+  }, [])
+
+  const createClassAnnouncement = useCallback(
+    (classId, message) =>
+      mutate(`/classes/${encodeURIComponent(classId)}/announcements`, {
+        method: 'POST',
+        body: JSON.stringify({ message }),
+      }),
+    [mutate],
+  )
+
+  const deleteClassAnnouncement = useCallback(
+    (classId, announcementId) =>
+      mutate(
+        `/classes/${encodeURIComponent(classId)}/announcements/${encodeURIComponent(announcementId)}`,
+        { method: 'DELETE' },
+      ),
+    [mutate],
+  )
+
+  const addAnnouncementComment = useCallback(
+    async (classId, announcementId, message) => {
+      const data = await request(
+        `/classes/${encodeURIComponent(classId)}/announcements/${encodeURIComponent(announcementId)}/comments`,
+        { method: 'POST', body: JSON.stringify({ message }) },
+      )
+      signalLearningChange()
+      return data.comment
+    },
+    [],
+  )
+
+  const getClasswork = useCallback(async (classId) => {
+    const data = await request(
+      `/classes/${encodeURIComponent(classId)}/classwork`,
+    )
+    return Array.isArray(data.classwork) ? data.classwork : []
+  }, [])
+
+  const getClassPeople = useCallback(async (classId) => {
+    const data = await request(
+      `/classes/${encodeURIComponent(classId)}/people`,
+    )
+    return {
+      teacher: data.teacher || null,
+      students: Array.isArray(data.students) ? data.students : [],
+    }
+  }, [])
+
+  const createClasswork = useCallback(
+    (classId, payload) =>
+      mutate(`/classes/${encodeURIComponent(classId)}/classwork`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    [mutate],
+  )
+
+  const deleteClasswork = useCallback(
+    (classworkId) =>
+      mutate(`/classwork/${encodeURIComponent(classworkId)}`, {
+        method: 'DELETE',
+      }),
+    [mutate],
+  )
+
+  const uploadClassworkAttachment = useCallback(
+    async (classworkId, file) => {
+      const formData = new FormData()
+      formData.append('file', file)
+      const response = await fetch(
+        `/api/learning/classwork/${encodeURIComponent(classworkId)}/attachments`,
+        { method: 'POST', headers: authHeaders(), body: formData },
+      )
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.message || 'Could not upload the attachment.')
+      }
+      await refresh({ silent: true })
+      signalLearningChange()
+      return data.attachment
+    },
+    [refresh],
+  )
+
+  const downloadClassworkAttachment = useCallback(
+    async (classworkId, attachment) => {
+      const response = await fetch(
+        `/api/learning/classwork/${encodeURIComponent(classworkId)}/attachments/${encodeURIComponent(attachment.fileId)}`,
+        { headers: authHeaders() },
+      )
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.message || 'Could not download the attachment.')
+      }
+      const objectUrl = URL.createObjectURL(await response.blob())
+      const link = document.createElement('a')
+      link.href = objectUrl
+      link.download = attachment.fileName || 'classwork-attachment'
+      document.body.append(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+    },
+    [],
+  )
+
+  const getClassworkSubmissions = useCallback(async (classworkId) => {
+    const data = await request(
+      `/classwork/${encodeURIComponent(classworkId)}/submissions`,
+    )
+    return Array.isArray(data.submissions) ? data.submissions : []
+  }, [])
+
+  const submitClasswork = useCallback(
+    async (classworkId, { text, file }) => {
+      const formData = new FormData()
+      formData.append('text', text || '')
+      if (file) formData.append('file', file)
+      const response = await fetch(
+        `/api/learning/classwork/${encodeURIComponent(classworkId)}/submission`,
+        { method: 'POST', headers: authHeaders(), body: formData },
+      )
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.message || 'Could not turn in your work.')
+      }
+      await refresh({ silent: true })
+      signalLearningChange()
+      return data.submission
+    },
+    [refresh],
+  )
+
+  const gradeClassworkSubmission = useCallback(
+    (classworkId, studentId, payload) =>
+      mutate(
+        `/classwork/${encodeURIComponent(classworkId)}/submissions/${encodeURIComponent(studentId)}`,
+        { method: 'PATCH', body: JSON.stringify(payload) },
+      ),
+    [mutate],
+  )
+
+  const downloadSubmissionFile = useCallback(
+    async (submissionId, fileName) => {
+      const response = await fetch(
+        `/api/learning/submissions/${encodeURIComponent(submissionId)}/file`,
+        { headers: authHeaders() },
+      )
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.message || 'Could not download the submission.')
+      }
+      const objectUrl = URL.createObjectURL(await response.blob())
+      const link = document.createElement('a')
+      link.href = objectUrl
+      link.download = fileName || 'student-submission'
+      document.body.append(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+    },
+    [],
+  )
+
+  const uploadSlideFile = useCallback(
+    async (slideId, file) => {
+      const formData = new FormData()
+      formData.append('presentation', file)
+      const response = await fetch(
+        `/api/learning/slides/${encodeURIComponent(slideId)}/presentation`,
+        {
+          method: 'POST',
+          headers: authHeaders(),
+          body: formData,
+        },
+      )
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.message || 'Could not upload the file.')
+      }
+      await refresh({ silent: true })
+      signalLearningChange()
+      return data.presentation
+    },
+    [refresh],
+  )
+
+  const downloadSlideFile = useCallback(async (slideId) => {
+    const response = await fetch(
+      `/api/learning/slides/${encodeURIComponent(slideId)}/presentation`,
+      { headers: authHeaders() },
+    )
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}))
+      throw new Error(data.message || 'Could not download the file.')
+    }
+
+    const slide = slides.find((item) => item.id === slideId)
+    const presentation = slide?.content?.[0]?.presentation
+    const fileName = presentation?.fileName || 'lesson-file'
+    const objectUrl = URL.createObjectURL(await response.blob())
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = fileName
+    document.body.append(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+  }, [slides])
+
+  const previewSlideFile = useCallback(async (slideId) => {
+    const previewWindow = window.open('about:blank', '_blank')
+    if (!previewWindow) {
+      throw new Error('Allow pop-ups to preview this file.')
+    }
+
+    try {
+      const response = await fetch(
+        `/api/learning/slides/${encodeURIComponent(slideId)}/presentation?preview=1`,
+        { headers: authHeaders() },
+      )
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.message || 'Could not preview the file.')
+      }
+
+      const objectUrl = URL.createObjectURL(await response.blob())
+      previewWindow.location.href = objectUrl
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000)
+    } catch (error) {
+      previewWindow.close()
+      throw error
+    }
+  }, [])
+
   return {
     classes,
     quizzes,
+    slides,
+    students,
+    classwork,
     activity,
     syncedAt,
     loading,
@@ -197,5 +520,29 @@ export function useLearningData({ pollInterval = 3000 } = {}) {
     createQuiz,
     updateQuiz,
     deleteQuiz,
+    submitQuizAttempt,
+    createSlide,
+    updateSlide,
+    deleteSlide,
+    enrollClass,
+    getClassStudents,
+    getClassQuizAttempts,
+    getClassAnnouncements,
+    createClassAnnouncement,
+    deleteClassAnnouncement,
+    addAnnouncementComment,
+    getClasswork,
+    getClassPeople,
+    createClasswork,
+    deleteClasswork,
+    uploadClassworkAttachment,
+    downloadClassworkAttachment,
+    getClassworkSubmissions,
+    submitClasswork,
+    gradeClassworkSubmission,
+    downloadSubmissionFile,
+    uploadSlideFile,
+    downloadSlideFile,
+    previewSlideFile,
   }
 }

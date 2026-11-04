@@ -1,7 +1,11 @@
-import { useState } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import Icon from '../components/Icon.jsx'
 import { Avatar } from '../components/DashboardUI.jsx'
+import HelpCenterModal from '../components/HelpCenterModal.jsx'
+import NotificationMenu from '../components/NotificationMenu.jsx'
+import SettingsModal from '../components/SettingsModal.jsx'
+import WorkspaceSearch from '../components/WorkspaceSearch.jsx'
 import { useToast } from '../context/toast.js'
 import './DashboardLayout.css'
 
@@ -13,14 +17,18 @@ const navigation = {
         { label: 'Overview', to: '/student/dashboard', icon: 'grid' },
         { label: 'My Classes', to: '/student/subjects', icon: 'book' },
         { label: 'Lessons', to: '/student/lessons', icon: 'presentation' },
-        { label: 'Presentations', to: '/student/presentations', icon: 'layers' },
+        {
+          label: 'Presentations',
+          to: '/student/presentations',
+          icon: 'layers',
+          nested: true,
+        },
         { label: 'My Notes', to: '/student/notes', icon: 'notes' },
       ],
     },
     {
       label: 'Assessment',
       items: [
-        { label: 'My Quizzes', to: '/student/quizzes', icon: 'quiz' },
         { label: 'Quiz Results', to: '/student/results', icon: 'chart' },
         { label: 'Learning Progress', to: '/student/progress', icon: 'trend' },
       ],
@@ -37,6 +45,7 @@ const navigation = {
           label: 'Presentation Studio',
           to: '/faculty/presentations',
           icon: 'layers',
+          nested: true,
         },
         { label: 'All Tests', to: '/faculty/quizzes', icon: 'quiz' },
         {
@@ -53,12 +62,12 @@ const navigation = {
         {
           label: 'Settings',
           icon: 'settings',
-          notice: 'Settings will be available soon.',
+          action: 'settings',
         },
         {
           label: 'Help Center',
           icon: 'help',
-          notice: 'Help Center is coming soon.',
+          action: 'help',
         },
       ],
     },
@@ -76,12 +85,50 @@ const roleDetails = {
   },
 }
 
-function DashboardLayout({ role, user, onLogout, children }) {
+const facultyPageTitles = [
+  { path: '/faculty/dashboard', label: 'Dashboard' },
+  { path: '/faculty/subjects', label: 'My Classes' },
+  { path: '/faculty/lessons', label: 'Lessons' },
+  { path: '/faculty/presentations', label: 'Presentation Studio' },
+  { path: '/faculty/quizzes', label: 'All Tests' },
+  { path: '/faculty/performance', label: 'Tests Monitoring' },
+  { path: '/faculty/reports', label: 'Reports' },
+]
+
+const getPageTitle = (role, pathname) => {
+  if (role !== 'Faculty') {
+    return ''
+  }
+
+  const match = facultyPageTitles.find(
+    ({ path }) => pathname === path || pathname.startsWith(`${path}/`),
+  )
+
+  return match?.label || 'Faculty workspace'
+}
+
+function DashboardLayout({ role, user, onLogout, onUserUpdate, children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const navigate = useNavigate()
+  const location = useLocation()
   const notify = useToast()
   const meta = roleDetails[role]
   const groups = navigation[role]
+  const pageTitle = getPageTitle(role, location.pathname)
+
+  useEffect(() => {
+    if (role !== 'Faculty') {
+      return undefined
+    }
+
+    document.title = `${pageTitle} · LearnSpace`
+
+    return () => {
+      document.title = 'LearnSpace'
+    }
+  }, [pageTitle, role])
 
   const handleLogout = () => {
     onLogout()
@@ -90,8 +137,21 @@ function DashboardLayout({ role, user, onLogout, children }) {
 
   return (
     <div className={`lms-shell lms-role-${role.toLowerCase()}`}>
+      <a className="lms-skip-link" href="#lms-main-content">
+        Skip to content
+      </a>
+
       <aside className={`lms-sidebar ${sidebarOpen ? 'is-open' : ''}`}>
         <div className="lms-sidebar-top">
+          <button
+            type="button"
+            className="lms-sidebar-close"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Close navigation"
+          >
+            <Icon name="close" size={18} />
+          </button>
+
           <NavLink
             to={`/${role.toLowerCase()}/dashboard`}
             className="lms-brand"
@@ -127,7 +187,7 @@ function DashboardLayout({ role, user, onLogout, children }) {
                   <NavLink
                     key={item.to}
                     to={item.to}
-                    end
+                    end={!item.nested}
                     onClick={() => setSidebarOpen(false)}
                     className={({ isActive }) =>
                       `lms-nav-link ${isActive ? 'is-active' : ''}`
@@ -143,6 +203,17 @@ function DashboardLayout({ role, user, onLogout, children }) {
                     className="lms-nav-link"
                     onClick={() => {
                       setSidebarOpen(false)
+
+                      if (item.action === 'settings') {
+                        setSettingsOpen(true)
+                        return
+                      }
+
+                      if (item.action === 'help') {
+                        setHelpOpen(true)
+                        return
+                      }
+
                       notify(item.notice)
                     }}
                   >
@@ -163,7 +234,7 @@ function DashboardLayout({ role, user, onLogout, children }) {
                   <Icon name="sparkles" size={16} />
                 </span>
                 <strong>Unlock Premium Access</strong>
-                <p>Unlimited practice quizzes, offline notes, and priority support.</p>
+                <p>Teacher-shared quizzes, offline notes, and priority support.</p>
                 <button
                   type="button"
                   className="lms-promo-btn"
@@ -177,14 +248,20 @@ function DashboardLayout({ role, user, onLogout, children }) {
               <div className="lms-sidebar-utility">
                 <button
                   type="button"
-                  onClick={() => notify('Settings will be available soon.')}
+                  onClick={() => {
+                    setSidebarOpen(false)
+                    setSettingsOpen(true)
+                  }}
                 >
                   <Icon name="settings" size={16} />
                   Settings
                 </button>
                 <button
                   type="button"
-                  onClick={() => notify('Help Center is coming soon.')}
+                  onClick={() => {
+                    setSidebarOpen(false)
+                    setHelpOpen(true)
+                  }}
                 >
                   <Icon name="help" size={16} />
                   Help Center
@@ -253,69 +330,22 @@ function DashboardLayout({ role, user, onLogout, children }) {
           </button>
 
           {role === 'Faculty' && (
-            <span className="lms-topbar-heading">Dashboard</span>
+            <span className="lms-topbar-heading">{pageTitle}</span>
           )}
 
-          <div className="lms-search" role="search">
-            <Icon name="search" size={18} />
-            <input
-              type="search"
-              placeholder={
-                role === 'Faculty'
-                  ? 'Search subjects, lessons, students...'
-                  : 'Search courses, lessons...'
-              }
-              aria-label="Search workspace"
-            />
-            <span className="lms-search-key">⌘ K</span>
-          </div>
+          <WorkspaceSearch
+            role={role}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenHelp={() => setHelpOpen(true)}
+          />
 
           <div className="lms-topbar-actions">
-            {role === 'Faculty' && (
-              <div className="lms-faculty-utility">
-                <button
-                  type="button"
-                  className="lms-icon-btn"
-                  aria-label="Help"
-                  title="Help"
-                  onClick={() => notify('Help Center is coming soon.')}
-                >
-                  <Icon name="help" size={18} />
-                </button>
-                <button
-                  type="button"
-                  className="lms-icon-btn"
-                  aria-label="Documentation"
-                  title="Documentation"
-                  onClick={() => notify('Documentation is coming soon.')}
-                >
-                  <Icon name="fileText" size={18} />
-                </button>
-                <button
-                  type="button"
-                  className="lms-icon-btn"
-                  aria-label="Messages"
-                  title="Messages"
-                  onClick={() => notify('Messages are coming soon.')}
-                >
-                  <Icon name="message" size={18} />
-                </button>
-              </div>
-            )}
-
-            <button
-              type="button"
-              className="lms-icon-btn lms-notification"
-              aria-label="Notifications"
-            >
-              <Icon name="bell" size={19} />
-              <span className="lms-notification-dot" />
-            </button>
+            <NotificationMenu role={role} />
 
             {role === 'Faculty' && (
               <button
                 type="button"
-                className="lms-btn lms-btn-primary lms-btn-sm lms-request-btn"
+                className="lms-btn lms-btn-secondary lms-btn-sm lms-request-btn"
                 onClick={() => notify('Feature requests are coming soon.')}
               >
                 <Icon name="sparkles" size={14} />
@@ -345,13 +375,27 @@ function DashboardLayout({ role, user, onLogout, children }) {
           </div>
         </header>
 
-        <main className="lms-content">{children}</main>
+        <main className="lms-content" id="lms-main-content" tabIndex={-1}>
+          {children}
+        </main>
 
         <footer className="lms-footer">
           <span>LearnSpace · Shared learning platform</span>
           <span>Protected {role.toLowerCase()} access</span>
         </footer>
       </div>
+
+      {settingsOpen && (
+        <SettingsModal
+          user={user}
+          onClose={() => setSettingsOpen(false)}
+          onUserUpdate={onUserUpdate}
+        />
+      )}
+
+      {helpOpen && (
+        <HelpCenterModal user={user} onClose={() => setHelpOpen(false)} />
+      )}
     </div>
   )
 }

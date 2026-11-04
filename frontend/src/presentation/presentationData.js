@@ -1,5 +1,3 @@
-import { studentLessons } from '../data/sampleData.js'
-
 export const SLIDE_WIDTH = 1280
 export const SLIDE_HEIGHT = 720
 
@@ -590,8 +588,6 @@ export const buildPresentationFromLesson = (lesson) => {
     updatedAt: timestamp,
   }
 }
-
-export const PRESENTATION_SEEDS = studentLessons.map(buildPresentationFromLesson)
 
 export const buildTemplateSlide = (templateId, themeKey = 'violet') => {
   const theme = getPresentationTheme(themeKey)

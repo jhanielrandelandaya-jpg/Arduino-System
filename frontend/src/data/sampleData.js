@@ -415,52 +415,6 @@ export const studentQuizzes = [
       },
     ],
   },
-  {
-    id: 'quiz-4',
-    title: 'Web Basics Practice',
-    subjectId: 'it-210',
-    subjectCode: 'IT 210',
-    type: 'Practice quiz',
-    questions: 5,
-    timeLimit: 8,
-    maxScore: 20,
-    passing: 70,
-    attemptsAllowed: 99,
-    attemptsUsed: 3,
-    bestScore: 85,
-    due: 'No deadline',
-    status: 'Practice',
-    questionList: [
-      {
-        id: 'q1',
-        prompt: 'Which HTTP method is typically used to retrieve data?',
-        options: ['POST', 'GET', 'DELETE', 'PATCH'],
-        answer: 1,
-      },
-      {
-        id: 'q2',
-        prompt: 'What does a 404 status code mean?',
-        options: [
-          'The request succeeded',
-          'The server encountered an error',
-          'The resource was not found',
-          'Authentication is required',
-        ],
-        answer: 2,
-      },
-      {
-        id: 'q3',
-        prompt: 'Where should authorization checks happen?',
-        options: [
-          'Only in the browser',
-          'Only in CSS',
-          'On the server',
-          'In the database schema only',
-        ],
-        answer: 2,
-      },
-    ],
-  },
 ]
 
 export const quizResults = [

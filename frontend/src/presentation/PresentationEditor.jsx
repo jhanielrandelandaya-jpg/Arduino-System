@@ -103,18 +103,19 @@ function useDeckHistory(initial) {
   }
 }
 
-export default function PresentationEditor() {
+export default function PresentationEditor({ userId }) {
   const { presentationId } = useParams()
   return (
     <EditorLoader
-      key={presentationId}
+      key={`${userId}:${presentationId}`}
       presentationId={presentationId}
+      userId={userId}
     />
   )
 }
 
-function EditorLoader({ presentationId }) {
-  const [initial] = useState(() => loadPresentation(presentationId))
+function EditorLoader({ presentationId, userId }) {
+  const [initial] = useState(() => loadPresentation(presentationId, userId))
 
   if (!initial) {
     return (
@@ -129,10 +130,10 @@ function EditorLoader({ presentationId }) {
     )
   }
 
-  return <Editor initial={initial} />
+  return <Editor initial={initial} userId={userId} />
 }
 
-function Editor({ initial }) {
+function Editor({ initial, userId }) {
   const notify = useToast()
   const {
     deck,
@@ -191,28 +192,28 @@ function Editor({ initial }) {
 
   useEffect(() => {
     latestDeckRef.current = deck
-  }, [deck])
+  }, [deck, userId])
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      savePresentation(deck)
+      savePresentation(deck, userId)
       setSaveState('saved')
     }, 700)
     return () => clearTimeout(timer)
-  }, [deck])
+  }, [deck, userId])
 
   useEffect(
     () => () => {
-      savePresentation(latestDeckRef.current)
+      savePresentation(latestDeckRef.current, userId)
     },
-    [],
+    [userId],
   )
 
   const saveNow = useCallback(() => {
-    savePresentation(deck)
+    savePresentation(deck, userId)
     setSaveState('saved')
     notify('Presentation saved.')
-  }, [deck, notify])
+  }, [deck, notify, userId])
 
   const updateSlide = useCallback(
     (slideUpdater, { replaceOnly = false } = {}) => {
