@@ -69,8 +69,11 @@ answer, and paragraph answers.
 The learning schema uses `classes.faculty_id`, unique `classes.join_code`,
 `enrollments`, class-associated `classwork` (`assignment`, `quiz`, and
 `material`), and student `submissions`. Starting the backend detects the legacy
-`classes.teacher_id` schema and resets the legacy learning tables, retaining
-accounts and user settings.
+`classes.teacher_id` schema and renames the legacy learning tables to
+`legacy_backup_*` tables before creating the current schema. This preserves old
+classwork and enrollment data in the SQLite database rather than deleting it;
+the archived rows are retained for manual migration and are not exposed through
+the application APIs.
 
 Run authorization tests with:
 

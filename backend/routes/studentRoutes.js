@@ -52,7 +52,17 @@ router.get('/dashboard', requireAuth, requireRole('Student'), (req, res) => {
       JOIN enrollments e ON e.class_id = c.id
       WHERE e.student_id = ? AND e.status = 'Active'
         AND c.status = 'Published' AND s.status = 'Published'
-      ORDER BY s.created_date DESC
+      ORDER BY s.created_date ASC
+    `).all(req.userId)
+    const attempts = db.prepare(`
+      SELECT qa.id, qa.quiz_id, qa.score, qa.passed, qa.correct_count,
+        qa.question_count, qa.submitted_at, q.quiz_title, q.class_id,
+        q.passing, c.subject_code, c.class_name
+      FROM quiz_attempts qa
+      JOIN quizzes q ON q.id = qa.quiz_id
+      JOIN classes c ON c.id = q.class_id
+      WHERE qa.student_id = ?
+      ORDER BY qa.submitted_at DESC
     `).all(req.userId)
     const classwork = db.prepare(`
       SELECT w.*, c.class_name, c.subject_code, c.faculty_id,
@@ -77,6 +87,20 @@ router.get('/dashboard', requireAuth, requireRole('Student'), (req, res) => {
       classes: classes.map(mapClass),
       quizzes: quizzes.map((quiz) => mapQuiz(quiz, { includeAnswers: false })),
       slides: slides.map(mapSlide),
+      attempts: attempts.map((attempt) => ({
+        id: attempt.id,
+        quizId: attempt.quiz_id,
+        quizTitle: attempt.quiz_title,
+        classId: attempt.class_id,
+        className: attempt.class_name,
+        subjectCode: attempt.subject_code,
+        score: attempt.score,
+        passed: Boolean(attempt.passed),
+        correctCount: attempt.correct_count,
+        questionCount: attempt.question_count,
+        passing: attempt.passing,
+        submittedAt: attempt.submitted_at,
+      })),
       classwork: classwork.map(mapClasswork),
       syncedAt: new Date().toISOString(),
     })

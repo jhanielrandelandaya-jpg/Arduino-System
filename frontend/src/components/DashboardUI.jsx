@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import Icon from './Icon.jsx'
 
 export function PageHeader({ eyebrow, title, description, actions }) {
@@ -196,30 +196,52 @@ export function EmptyState({ icon = 'search', title, description, action }) {
 }
 
 export function Modal({ title, description, onClose, children, footer, size = 'md' }) {
+  const onCloseRef = useRef(onClose)
+  const closeButtonRef = useRef(null)
+
   useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
+
+  useEffect(() => {
+    const scrollX = window.scrollX
+    const scrollY = window.scrollY
+    const previouslyFocused = document.activeElement
+
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
-        onClose()
+        onCloseRef.current()
       }
     }
 
     document.addEventListener('keydown', handleKeyDown)
     document.body.classList.add('lms-modal-open')
+    closeButtonRef.current?.focus({ preventScroll: true })
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
       document.body.classList.remove('lms-modal-open')
+      window.scrollTo(scrollX, scrollY)
+      if (previouslyFocused instanceof HTMLElement) {
+        previouslyFocused.focus({ preventScroll: true })
+      }
     }
-  }, [onClose])
+  }, [])
 
   return (
-    <div className="lms-modal-backdrop" role="presentation" onMouseDown={onClose}>
+    <div
+      className="lms-modal-backdrop"
+      role="presentation"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
       <div
         className={`lms-modal lms-modal-${size}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="lms-modal-title"
-        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
       >
         <div className="lms-modal-head">
           <div>
@@ -227,6 +249,7 @@ export function Modal({ title, description, onClose, children, footer, size = 'm
             {description && <p>{description}</p>}
           </div>
           <button
+            ref={closeButtonRef}
             type="button"
             className="lms-icon-btn"
             onClick={onClose}

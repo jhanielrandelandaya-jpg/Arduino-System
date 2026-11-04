@@ -9,6 +9,7 @@ import {
 } from '../components/DashboardUI.jsx'
 import Icon from '../components/Icon.jsx'
 import { useToast } from '../context/toast.js'
+import StudentAttachmentPreview from './StudentAttachmentPreview.jsx'
 import './ClassroomWorkspace.css'
 
 const tabs = ['Stream', 'Classwork', 'People']
@@ -45,6 +46,7 @@ export default function ClassroomWorkspace({
   deleteClasswork,
   uploadClassworkAttachment,
   downloadClassworkAttachment,
+  onPreviewAttachment,
   getClassworkSubmissions,
   gradeClassworkSubmission,
   submitClasswork,
@@ -69,6 +71,15 @@ export default function ClassroomWorkspace({
   const [creatingClasswork, setCreatingClasswork] = useState(false)
   const [reviewingClasswork, setReviewingClasswork] = useState('')
   const [currentTime, setCurrentTime] = useState(Date.now())
+  const [attachmentPreview, setAttachmentPreview] = useState(null)
+  const [previewingFileId, setPreviewingFileId] = useState('')
+
+  useEffect(
+    () => () => {
+      if (attachmentPreview?.url) URL.revokeObjectURL(attachmentPreview.url)
+    },
+    [attachmentPreview],
+  )
 
   useEffect(() => {
     let active = true
@@ -320,9 +331,30 @@ export default function ClassroomWorkspace({
 
   const downloadLessonFile = async (slideId, preview = false) => {
     try {
-      await (preview ? onPreviewFile(slideId) : onDownloadFile(slideId))
+      const result = await (preview
+        ? onPreviewFile(slideId)
+        : onDownloadFile(slideId))
+      if (preview && result?.url) {
+        setAttachmentPreview(result)
+      }
     } catch (error) {
       notify(error.message, 'error')
+    }
+  }
+
+  const openAttachmentPreview = async (item, attachment) => {
+    if (!onPreviewAttachment) return
+    setPreviewingFileId(attachment.fileId)
+    try {
+      const preview = await onPreviewAttachment(item.id, attachment)
+      setAttachmentPreview({
+        ...preview,
+        fileName: attachment.fileName,
+      })
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setPreviewingFileId('')
     }
   }
 
@@ -499,6 +531,12 @@ export default function ClassroomWorkspace({
                           (error) => notify(error.message, 'error'),
                         )
                       }
+                      onPreviewAttachment={
+                        onPreviewAttachment
+                          ? (attachment) => openAttachmentPreview(item, attachment)
+                          : undefined
+                      }
+                      previewingFileId={previewingFileId}
                       onDownloadSubmission={(id, name) =>
                         downloadSubmissionFile(id, name).catch(
                           (error) => notify(error.message, 'error'),
@@ -531,24 +569,27 @@ export default function ClassroomWorkspace({
                           {slide.status}
                         </Badge>
                       )}
-                      {role === 'Student' && slide.content?.[0]?.presentation?.fileId && (
+                      {slide.content?.[0]?.presentation?.fileId && (
                         <>
-                          {slide.content[0].presentation.previewable && (
+                          {slide.content[0].presentation.previewable &&
+                            onPreviewFile && (
+                              <button
+                                type="button"
+                                className="lms-link"
+                                onClick={() => downloadLessonFile(slide.id, true)}
+                              >
+                                Preview file
+                              </button>
+                            )}
+                          {onDownloadFile && (
                             <button
                               type="button"
                               className="lms-link"
-                              onClick={() => downloadLessonFile(slide.id, true)}
+                              onClick={() => downloadLessonFile(slide.id)}
                             >
-                              Preview file
+                              Download file
                             </button>
                           )}
-                          <button
-                            type="button"
-                            className="lms-link"
-                            onClick={() => downloadLessonFile(slide.id)}
-                          >
-                            Download file
-                          </button>
                         </>
                       )}
                       {role === 'Student' && (
@@ -690,6 +731,19 @@ export default function ClassroomWorkspace({
           onSave={saveClasswork}
         />
       )}
+      {attachmentPreview && (
+        <Modal
+          title={attachmentPreview.fileName}
+          description="Preview of the file shared in this class."
+          onClose={() => setAttachmentPreview(null)}
+          size="lg"
+        >
+          <StudentAttachmentPreview
+            key={attachmentPreview.url}
+            file={attachmentPreview}
+          />
+        </Modal>
+      )}
     </div>
   )
 }
@@ -778,6 +832,8 @@ function ClassworkItem({
   onReview,
   onSubmit,
   onDownloadAttachment,
+  onPreviewAttachment,
+  previewingFileId,
   onDownloadSubmission,
   getSubmissions,
   onGrade,
@@ -900,15 +956,25 @@ function ClassworkItem({
             <div className="lms-classroom-attachment" key={attachment.fileId}>
               <Icon name="fileText" size={15} />
               <span>{attachment.fileName}</span>
-              {role === 'Student' && (
+              {onPreviewAttachment && (
                 <button
                   type="button"
                   className="lms-link"
-                  onClick={() => onDownloadAttachment(attachment)}
+                  onClick={() => onPreviewAttachment(attachment)}
+                  disabled={previewingFileId === attachment.fileId}
                 >
-                  Download
+                  {previewingFileId === attachment.fileId
+                    ? 'Loading preview...'
+                    : 'Preview'}
                 </button>
               )}
+              <button
+                type="button"
+                className="lms-link"
+                onClick={() => onDownloadAttachment(attachment)}
+              >
+                Download
+              </button>
             </div>
           ))}
         </div>

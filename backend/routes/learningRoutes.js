@@ -182,9 +182,7 @@ const quizFields = (body, current = {}) => {
     questions: Number.isFinite(questionCount)
       ? questionCount
       : current.questions || questionList.length || 1,
-    attemptsAllowed: Number.isFinite(Number(body.attemptsAllowed))
-      ? Number(body.attemptsAllowed)
-      : current.attempts_allowed || 2,
+    attemptsAllowed: 1,
     questionList,
   }
 }
@@ -358,7 +356,56 @@ const removePresentationFile = (presentation) => {
 }
 
 const previewMimeForFile = (extension, buffer) => {
-  if (['.txt', '.csv', '.md', '.log'].includes(extension)) {
+  if (extension === '.svg') {
+    return 'image/svg+xml'
+  }
+  if (extension === '.bmp' && buffer.subarray(0, 2).toString() === 'BM') {
+    return 'image/bmp'
+  }
+  if (
+    extension === '.avif' &&
+    buffer.subarray(4, 8).toString() === 'ftyp' &&
+    buffer.subarray(8, 12).toString().includes('avif')
+  ) {
+    return 'image/avif'
+  }
+  if (
+    ['.tif', '.tiff'].includes(extension) &&
+    ['49492A00', '4D4D002A'].includes(buffer.subarray(0, 4).toString('hex').toUpperCase())
+  ) {
+    return 'image/tiff'
+  }
+  if (
+    [
+      '.txt',
+      '.csv',
+      '.tsv',
+      '.md',
+      '.log',
+      '.json',
+      '.xml',
+      '.html',
+      '.htm',
+      '.css',
+      '.js',
+      '.ts',
+      '.jsx',
+      '.tsx',
+      '.yml',
+      '.yaml',
+      '.ini',
+      '.sql',
+      '.py',
+      '.java',
+      '.c',
+      '.cpp',
+      '.h',
+      '.sh',
+      '.bat',
+      '.ps1',
+      '.rtf',
+    ].includes(extension)
+  ) {
     return 'text/plain; charset=utf-8'
   }
   if (
@@ -391,6 +438,68 @@ const previewMimeForFile = (extension, buffer) => {
     buffer.subarray(8, 12).toString() === 'WEBP'
   ) {
     return 'image/webp'
+  }
+  const zipOfficeExtensions = [
+    '.docx',
+    '.docm',
+    '.dotx',
+    '.dotm',
+    '.xlsx',
+    '.xlsm',
+    '.xlsb',
+    '.xltx',
+    '.xltm',
+    '.ods',
+    '.pptx',
+    '.pptm',
+    '.ppsx',
+    '.potx',
+    '.potm',
+  ]
+  if (
+    zipOfficeExtensions.includes(extension) &&
+    buffer.subarray(0, 2).toString() === 'PK'
+  ) {
+    const officeMimeTypes = {
+      '.docx':
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.docm': 'application/vnd.ms-word.document.macroEnabled.12',
+      '.dotx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.template',
+      '.dotm': 'application/vnd.ms-word.template.macroEnabled.12',
+      '.xlsx':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      '.xlsm':
+        'application/vnd.ms-excel.sheet.macroEnabled.12',
+      '.xlsb': 'application/vnd.ms-excel.sheet.binary.macroEnabled.12',
+      '.xltx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.template',
+      '.xltm': 'application/vnd.ms-excel.template.macroEnabled.12',
+      '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
+      '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      '.pptm': 'application/vnd.ms-powerpoint.presentation.macroEnabled.12',
+      '.ppsx': 'application/vnd.openxmlformats-officedocument.presentationml.slideshow',
+      '.potx': 'application/vnd.openxmlformats-officedocument.presentationml.template',
+      '.potm': 'application/vnd.ms-powerpoint.template.macroEnabled.12',
+    }
+    return officeMimeTypes[extension]
+  }
+  if (['.mp3', '.wav', '.ogg', '.m4a', '.aac'].includes(extension)) {
+    const audioMimeTypes = {
+      '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav',
+      '.ogg': 'audio/ogg',
+      '.m4a': 'audio/mp4',
+      '.aac': 'audio/aac',
+    }
+    return audioMimeTypes[extension]
+  }
+  if (['.mp4', '.webm', '.ogv', '.mov'].includes(extension)) {
+    const videoMimeTypes = {
+      '.mp4': 'video/mp4',
+      '.webm': 'video/webm',
+      '.ogv': 'video/ogg',
+      '.mov': 'video/quicktime',
+    }
+    return videoMimeTypes[extension]
   }
   return null
 }
@@ -425,7 +534,7 @@ router.get('/bootstrap', requireAuth, requireRole('Faculty', 'Student'), (req, r
             WHERE e.class_id = c.id AND e.student_id = ? AND e.status = 'Active'
           )`
     const slides = db
-      .prepare(`${SLIDE_SELECT} WHERE ${slideScope} ORDER BY s.created_date DESC`)
+      .prepare(`${SLIDE_SELECT} WHERE ${slideScope} ORDER BY s.created_date ASC`)
       .all(req.userId)
     const activity = db
       .prepare(`
@@ -979,6 +1088,25 @@ router.get(
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ message: 'Attachment file not found.' })
     }
+    if (req.query.preview === '1') {
+      const extension = path.extname(attachment.fileName).toLowerCase()
+      const previewMime = previewMimeForFile(
+        extension,
+        fs.readFileSync(filePath).subarray(0, 16),
+      )
+      const safeFileName = safeUploadName(attachment.fileName).replace(/[^\w.-]/g, '_')
+      res.setHeader('Content-Type', previewMime || 'application/octet-stream')
+      res.setHeader('Content-Disposition', `inline; filename="${safeFileName}"`)
+      res.setHeader('X-Content-Type-Options', 'nosniff')
+      return res.sendFile(filePath, (error) => {
+        if (error) {
+          console.error('Preview classwork attachment error:', error)
+          if (!res.headersSent) {
+            res.status(404).json({ message: 'Attachment file not found.' })
+          }
+        }
+      })
+    }
     res.setHeader('X-Content-Type-Options', 'nosniff')
     return res.download(filePath, safeUploadName(attachment.fileName), (error) => {
       if (error) {
@@ -1492,8 +1620,8 @@ router.post(
             'SELECT COUNT(*) AS count FROM quiz_attempts WHERE quiz_id = ? AND student_id = ?',
           )
           .get(quiz.id, req.userId).count
-        if (attemptsUsed >= quiz.attempts_allowed) {
-          return { status: 409, message: 'You have used all allowed attempts.' }
+        if (attemptsUsed >= 1) {
+          return { status: 409, message: 'This quiz can only be taken once.' }
         }
 
         const correctCount = questions.filter(
@@ -1708,7 +1836,7 @@ router.get('/slides', requireAuth, requireRole('Faculty', 'Student'), (req, res)
             WHERE e.class_id = c.id AND e.student_id = ? AND e.status = 'Active'
           )`
     const slides = db
-      .prepare(`${SLIDE_SELECT} WHERE ${scope} ORDER BY s.created_date DESC`)
+      .prepare(`${SLIDE_SELECT} WHERE ${scope} ORDER BY s.created_date ASC`)
       .all(req.userId)
     return res.json({ slides: slides.map(mapSlide) })
   } catch (error) {
@@ -1782,12 +1910,7 @@ router.post(
         fileName,
         mimeType,
         size: req.file.size,
-        previewable: Boolean(
-          previewMimeForFile(
-            path.extname(fileName).toLowerCase(),
-            req.file.buffer,
-          ),
-        ),
+        previewable: true,
       }
 
       fs.mkdirSync(presentationDirectory, { recursive: true })
@@ -1846,13 +1969,8 @@ router.get(
         const extension = path.extname(fileName).toLowerCase()
         const signature = fs.readFileSync(filePath).subarray(0, 16)
         const previewMime = previewMimeForFile(extension, signature)
-        if (!previewMime) {
-          return res.status(415).json({
-            message: 'This file type cannot be previewed. Download it to open it.',
-          })
-        }
         const safeFileName = fileName.replace(/[^\w.-]/g, '_')
-        res.setHeader('Content-Type', previewMime)
+        res.setHeader('Content-Type', previewMime || 'application/octet-stream')
         res.setHeader('Content-Disposition', `inline; filename="${safeFileName}"`)
         res.setHeader('X-Content-Type-Options', 'nosniff')
         return res.sendFile(filePath, (error) => {

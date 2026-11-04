@@ -13,7 +13,7 @@ const db = new Database(dbPath)
 db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
 
-const resetLegacyLearningSchema = () => {
+const archiveLegacyLearningSchema = () => {
   const classes = db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'classes'")
     .get()
@@ -23,26 +23,52 @@ const resetLegacyLearningSchema = () => {
   const names = columns.map((column) => column.name)
   if (!names.includes('teacher_id') || names.includes('faculty_id')) return
 
+  const legacyTables = [
+    'student_notes',
+    'submissions',
+    'classwork',
+    'lessons',
+    'topics',
+    'subjects',
+    'class_announcement_comments',
+    'class_announcements',
+    'quizzes',
+    'slides',
+    'enrollments',
+    'activity_logs',
+    'classes',
+  ]
+  const existingTables = new Set(
+    db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all()
+      .map((table) => table.name),
+  )
+  const backupSuffix = `${Date.now()}_${crypto.randomBytes(3).toString('hex')}`
+
   db.transaction(() => {
-    db.exec(`
-      DROP TABLE IF EXISTS student_notes;
-      DROP TABLE IF EXISTS submissions;
-      DROP TABLE IF EXISTS classwork;
-      DROP TABLE IF EXISTS lessons;
-      DROP TABLE IF EXISTS topics;
-      DROP TABLE IF EXISTS subjects;
-      DROP TABLE IF EXISTS class_announcement_comments;
-      DROP TABLE IF EXISTS class_announcements;
-      DROP TABLE IF EXISTS quizzes;
-      DROP TABLE IF EXISTS slides;
-      DROP TABLE IF EXISTS enrollments;
-      DROP TABLE IF EXISTS activity_logs;
-      DROP TABLE IF EXISTS classes;
-    `)
+    for (const tableName of legacyTables) {
+      if (!existingTables.has(tableName)) continue
+      const backupName = `legacy_backup_${tableName}_${backupSuffix}`
+      db.exec(`ALTER TABLE "${tableName}" RENAME TO "${backupName}"`)
+    }
+
+    const archivedIndexes = db
+      .prepare(`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'index'
+          AND sql IS NOT NULL
+          AND tbl_name LIKE 'legacy_backup_%'
+      `)
+      .all()
+    for (const index of archivedIndexes) {
+      db.exec(`DROP INDEX "${index.name.replace(/"/g, '""')}"`)
+    }
   })()
 }
 
-resetLegacyLearningSchema()
+archiveLegacyLearningSchema()
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -99,7 +125,7 @@ db.exec(`
     max_score INTEGER NOT NULL DEFAULT 100,
     passing INTEGER NOT NULL DEFAULT 75,
     questions INTEGER NOT NULL DEFAULT 1,
-    attempts_allowed INTEGER NOT NULL DEFAULT 2,
+    attempts_allowed INTEGER NOT NULL DEFAULT 1,
     attempts INTEGER NOT NULL DEFAULT 0,
     average REAL,
     questions_json TEXT,
@@ -245,6 +271,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_activity_class ON activity_logs(class_id);
   CREATE INDEX IF NOT EXISTS idx_support_user ON support_tickets(user_id);
 `)
+
+db.exec('UPDATE quizzes SET attempts_allowed = 1 WHERE attempts_allowed <> 1')
 
 const classColumns = db.prepare('PRAGMA table_info(classes)').all()
 if (!classColumns.some((column) => column.name === 'join_code')) {

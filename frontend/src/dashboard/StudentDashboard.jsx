@@ -25,8 +25,7 @@ import {
 import { useToast } from '../context/toast.js'
 import { useLearningData } from '../hooks/useLearningData.js'
 import ClassroomWorkspace from './ClassroomWorkspace.jsx'
-import PresentationLibrary from '../presentation/PresentationLibrary.jsx'
-import PresentationViewer from '../presentation/PresentationViewer.jsx'
+import StudentAttachmentPreview from './StudentAttachmentPreview.jsx'
 
 const NOTES_KEY = 'learnspace_student_notes'
 
@@ -60,7 +59,77 @@ const formatRelativeTime = (value) => {
   return formatDate(value)
 }
 
-const sharedQuizForStudent = (quiz, progress = {}) => {
+const hashSeed = (value) => {
+  let hash = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
+const createSeededRandom = (seed) => {
+  let state = seed >>> 0
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0
+    let value = Math.imul(state ^ (state >>> 15), 1 | state)
+    value ^= value + Math.imul(value ^ (value >>> 7), 61 | value)
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+const shuffleQuestionsForStudent = (questionList, studentId, quizId) => {
+  if (!Array.isArray(questionList) || questionList.length < 2 || !studentId) {
+    return questionList
+  }
+
+  const random = createSeededRandom(hashSeed(`${studentId}:${quizId}`))
+  const shuffled = [...questionList]
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1))
+    const current = shuffled[index]
+    shuffled[index] = shuffled[swapIndex]
+    shuffled[swapIndex] = current
+  }
+  return shuffled
+}
+
+const shuffleOptionsForStudent = (questionList, studentId, quizId) => {
+  if (!Array.isArray(questionList) || !studentId) {
+    return questionList
+  }
+
+  return questionList.map((question) => {
+    if (
+      !question ||
+      typeof question !== 'object' ||
+      Array.isArray(question) ||
+      !Array.isArray(question.options) ||
+      question.options.length < 2
+    ) {
+      return question
+    }
+
+    const random = createSeededRandom(
+      hashSeed(`${studentId}:${quizId}:${question.id}:options`),
+    )
+    const optionOrder = question.options.map((_, index) => index)
+    for (let index = optionOrder.length - 1; index > 0; index -= 1) {
+      const swapIndex = Math.floor(random() * (index + 1))
+      const current = optionOrder[index]
+      optionOrder[index] = optionOrder[swapIndex]
+      optionOrder[swapIndex] = current
+    }
+
+    return {
+      ...question,
+      options: optionOrder.map((optionIndex) => question.options[optionIndex]),
+      optionOrder,
+    }
+  })
+}
+
+const sharedQuizForStudent = (quiz, progress = {}, studentId = '') => {
   return {
     ...quiz,
     title: quiz.quizTitle,
@@ -72,15 +141,18 @@ const sharedQuizForStudent = (quiz, progress = {}) => {
       progress.status ||
       (quiz.status === 'Draft'
         ? 'Draft'
-        : quiz.bestScore !== null && quiz.bestScore >= quiz.passing
+        : quiz.attemptsUsed > 0
           ? 'Completed'
-          : quiz.attemptsUsed > 0
-            ? 'Retake available'
-            : 'Available'),
+          : 'Available'),
+    attemptsAllowed: 1,
     attemptsUsed: progress.attemptsUsed ?? quiz.attemptsUsed ?? 0,
     bestScore: progress.bestScore ?? quiz.bestScore ?? null,
     due: quiz.dueDate || 'No deadline',
-    questionList: quiz.questionList || [],
+    questionList: shuffleOptionsForStudent(
+      shuffleQuestionsForStudent(quiz.questionList || [], studentId, quiz.id),
+      studentId,
+      quiz.id,
+    ),
   }
 }
 
@@ -125,6 +197,7 @@ function StudentWorkspace({ user, onLogout, onUserUpdate }) {
     quizzes: sharedQuizzes,
     slides,
     classwork,
+    quizAttempts,
     activity,
     enrollClass,
     getClassAnnouncements,
@@ -133,47 +206,45 @@ function StudentWorkspace({ user, onLogout, onUserUpdate }) {
     getClasswork,
     submitClasswork,
     downloadClassworkAttachment,
+    previewClassworkAttachment,
     downloadSubmissionFile,
     submitQuizAttempt,
     downloadSlideFile,
-    previewSlideFile,
+    loadSlideFilePreview,
     syncedAt,
     loading: sharedLoading,
     error,
     refresh,
   } = useLearningData({ role: 'Student' })
   const [quizProgress, setQuizProgress] = useState({})
-  const [results, setResults] = useState([])
 
   const quizzes = useMemo(
     () =>
       sharedQuizzes.map((quiz) =>
-        sharedQuizForStudent(quiz, quizProgress[quiz.id]),
+        sharedQuizForStudent(quiz, quizProgress[quiz.id], user.id),
       ),
-    [quizProgress, sharedQuizzes],
+    [quizProgress, sharedQuizzes, user.id],
+  )
+
+  const results = useMemo(
+    () =>
+      quizAttempts.map((attempt) => ({
+        id: attempt.id,
+        quiz: attempt.quizTitle,
+        quizId: attempt.quizId,
+        classId: attempt.classId,
+        subjectCode: attempt.subjectCode,
+        date: formatDate(attempt.submittedAt),
+        score: attempt.score,
+        passing: attempt.passing,
+        attempt: 'Latest',
+        status: attempt.passed ? 'Passed' : 'Failed',
+      })),
+    [quizAttempts],
   )
 
   const handleQuizComplete = async (quiz, answers) => {
     const result = await submitQuizAttempt(quiz.id, answers)
-    const today = new Date().toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })
-
-    setResults((current) => [
-      {
-        id: `result-${Date.now()}`,
-        quiz: quiz.title,
-        subjectCode: quiz.subjectCode,
-        date: today,
-        score: result.score,
-        passing: quiz.passing,
-        attempt: 'Latest',
-        status: result.passed ? 'Passed' : 'Failed',
-      },
-      ...current,
-    ])
 
     setQuizProgress((current) => {
       const previous = current[quiz.id] || {}
@@ -182,7 +253,7 @@ function StudentWorkspace({ user, onLogout, onUserUpdate }) {
         [quiz.id]: {
           attemptsUsed: (previous.attemptsUsed || quiz.attemptsUsed || 0) + 1,
           bestScore: Math.max(previous.bestScore || 0, result.score),
-          status: result.passed ? 'Completed' : 'Retake available',
+          status: 'Completed',
         },
       }
     })
@@ -233,11 +304,12 @@ function StudentWorkspace({ user, onLogout, onUserUpdate }) {
               addAnnouncementComment={addAnnouncementComment}
               submitClasswork={submitClasswork}
               downloadClassworkAttachment={downloadClassworkAttachment}
+              previewClassworkAttachment={previewClassworkAttachment}
               downloadSubmissionFile={downloadSubmissionFile}
               getAnnouncements={getClassAnnouncements}
               getPeople={getClassPeople}
               onDownloadFile={downloadSlideFile}
-              onPreviewFile={previewSlideFile}
+              onPreviewFile={loadSlideFilePreview}
               onQuizComplete={handleQuizComplete}
             />
           }
@@ -248,25 +320,33 @@ function StudentWorkspace({ user, onLogout, onUserUpdate }) {
             <StudentLessons
               slides={slides}
               classes={classes}
+              classwork={classwork}
+              quizzes={quizzes}
+              results={results}
+              onDownloadClassworkAttachment={downloadClassworkAttachment}
+              onPreviewClassworkAttachment={previewClassworkAttachment}
               onDownloadFile={downloadSlideFile}
-              onPreviewFile={previewSlideFile}
+              onPreviewSlideFile={loadSlideFilePreview}
             />
           }
         />
         <Route
-          path="presentations"
-          element={<PresentationLibrary role="student" userId={user.id} />}
-        />
-        <Route
-          path="presentations/:presentationId"
-          element={<PresentationViewer role="Student" userId={user.id} />}
+          path="presentations/*"
+          element={<Navigate to="/student/lessons" replace />}
         />
         <Route path="notes" element={<StudentNotes userId={user.id} slides={slides} />} />
         <Route path="quizzes" element={<Navigate to="subjects" replace />} />
         <Route path="results" element={<StudentResults results={results} />} />
         <Route
           path="progress"
-          element={<StudentProgress classes={classes} quizzes={quizzes} slides={slides} />}
+          element={
+            <StudentProgress
+              classes={classes}
+              quizzes={quizzes}
+              slides={slides}
+              results={results}
+            />
+          }
         />
         <Route path="*" element={<Navigate to="dashboard" replace />} />
       </Routes>
@@ -775,12 +855,20 @@ function StudentOverview({
             </div>
             <ProgressBar
               label="Lessons completed"
-              value={Math.round((completedLessons / totalLessons) * 100)}
+              value={
+                totalLessons
+                  ? Math.round((completedLessons / totalLessons) * 100)
+                  : 0
+              }
               tone="blue"
             />
             <ProgressBar
               label="Quizzes passed"
-              value={Math.round((passedQuizzes / results.length) * 100)}
+              value={
+                results.length
+                  ? Math.round((passedQuizzes / results.length) * 100)
+                  : 0
+              }
               tone="violet"
             />
           </section>
@@ -927,6 +1015,7 @@ function StudentSubjects({
   getClasswork,
   submitClasswork,
   downloadClassworkAttachment,
+  previewClassworkAttachment,
   downloadSubmissionFile,
   onDownloadFile,
   onPreviewFile,
@@ -988,6 +1077,7 @@ function StudentSubjects({
         addAnnouncementComment={addAnnouncementComment}
         submitClasswork={submitClasswork}
         downloadClassworkAttachment={downloadClassworkAttachment}
+        onPreviewAttachment={previewClassworkAttachment}
         downloadSubmissionFile={downloadSubmissionFile}
         onDownloadFile={onDownloadFile}
         onPreviewFile={onPreviewFile}
@@ -1184,27 +1274,108 @@ function StudentSubjects({
 function StudentLessons({
   slides,
   classes,
+  classwork,
+  quizzes,
+  results,
+  onDownloadClassworkAttachment,
+  onPreviewClassworkAttachment,
   onDownloadFile,
-  onPreviewFile,
+  onPreviewSlideFile,
 }) {
   const notify = useToast()
-  const lessons = slides.map((slide) => ({
-    ...slide,
-    subjectId: slide.classId,
-    content: slide.content
-      .map((item) => item.text || item.summary || '')
-      .filter(Boolean)
-      .join('\n\n'),
-    summary:
-      slide.content[0]?.summary ||
-      (slide.content[0]?.presentation?.fileName
-        ? 'File attachment available'
-        : 'Class lesson'),
-    duration: slide.content[0]?.presentation?.fileName
-      ? 'File attached'
-      : 'Lesson',
-    status: 'current',
-  }))
+  const [attachmentPreview, setAttachmentPreview] = useState(null)
+  const [previewingFileId, setPreviewingFileId] = useState('')
+  useEffect(
+    () => () => {
+      if (attachmentPreview?.url) URL.revokeObjectURL(attachmentPreview.url)
+    },
+    [attachmentPreview],
+  )
+  const passedQuizIds = new Set(
+    results.filter((result) => result.status === 'Passed').map((result) => result.quizId)
+  )
+
+  const slidesByClass = {}
+  slides.forEach((slide) => {
+    if (!slidesByClass[slide.classId]) {
+      slidesByClass[slide.classId] = []
+    }
+    slidesByClass[slide.classId].push(slide)
+  })
+
+  const slideStatuses = {}
+  Object.entries(slidesByClass).forEach(([classId, classSlides]) => {
+    const sortedSlides = classSlides.sort(
+      (a, b) => new Date(a.createdDate) - new Date(b.createdDate)
+    )
+    const classQuizzes = quizzes
+      .filter((q) => q.classId === classId && q.status !== 'Draft')
+      .sort((a, b) => new Date(a.createdDate) - new Date(b.createdDate))
+
+    let foundLocked = false
+    sortedSlides.forEach((slide, index) => {
+      if (foundLocked) {
+        slideStatuses[slide.id] = 'locked'
+        return
+      }
+
+      const prerequisiteQuiz = index > 0 ? classQuizzes[index - 1] : null
+
+      if (index > 0 && prerequisiteQuiz && !passedQuizIds.has(prerequisiteQuiz.id)) {
+        slideStatuses[slide.id] = 'locked'
+        foundLocked = true
+      } else {
+        const ownQuiz = classQuizzes[index]
+        if (ownQuiz && passedQuizIds.has(ownQuiz.id)) {
+          slideStatuses[slide.id] = 'completed'
+        } else {
+          slideStatuses[slide.id] = 'current'
+        }
+      }
+    })
+  })
+
+  const lessons = [
+    ...slides.map((slide) => ({
+      ...slide,
+      kind: 'slide',
+      subjectId: slide.classId,
+      content: slide.content
+        .map((item) => item.text || item.summary || '')
+        .filter(Boolean)
+        .join('\n\n'),
+      summary:
+        slide.content[0]?.summary ||
+        (slide.content[0]?.presentation?.fileName
+          ? 'File attachment available'
+          : 'Class lesson'),
+      presentation: slide.content[0]?.presentation || null,
+      duration: slide.content[0]?.presentation?.fileName
+        ? 'File attached'
+        : 'Lesson',
+      status: slideStatuses[slide.id] || 'current',
+      attachments: [],
+    })),
+    ...classwork
+      .filter((item) => item.type === 'material')
+      .map((item) => ({
+        ...item,
+        id: `material-${item.id}`,
+        kind: 'material',
+        classworkId: item.id,
+        subjectId: item.classId,
+        content: item.instructions || '',
+        summary: item.instructions || 'Shared class material',
+        duration: item.attachments.length
+          ? `${item.attachments.length} attachment${item.attachments.length === 1 ? '' : 's'}`
+          : 'Material',
+        status: 'current',
+      })),
+  ].sort((first, second) => {
+    const firstDate = new Date(first.createdDate || first.createdAt || 0).getTime()
+    const secondDate = new Date(second.createdDate || first.createdAt || 0).getTime()
+    return firstDate - secondDate
+  })
   const [selectedId, setSelectedId] = useState('')
   const requestedClassId = new URLSearchParams(window.location.search).get('classId')
   const [subjectFilter, setSubjectFilter] = useState(
@@ -1232,10 +1403,31 @@ function StudentLessons({
     }
   }
   const openPresentation = async () => {
+    setPreviewingFileId(selected.id)
     try {
-      await onPreviewFile(selected.id)
+      const preview = await onPreviewSlideFile(selected.id)
+      setAttachmentPreview(preview)
     } catch (error) {
       notify(error.message, 'error')
+    } finally {
+      setPreviewingFileId('')
+    }
+  }
+  const openClassworkAttachment = async (item, attachment) => {
+    setPreviewingFileId(attachment.fileId)
+    try {
+      const preview = await onPreviewClassworkAttachment(
+        item.classworkId,
+        attachment,
+      )
+      setAttachmentPreview({
+        ...preview,
+        fileName: attachment.fileName,
+      })
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setPreviewingFileId('')
     }
   }
 
@@ -1243,8 +1435,8 @@ function StudentLessons({
     <>
       <PageHeader
         eyebrow="Lessons"
-        title="Lessons & presentations"
-        description="Read lesson text, open supported file previews, and download lesson attachments."
+        title="Lessons and materials"
+        description="Lessons and teacher-shared class materials are collected here."
         actions={
           <select
             className="lms-select"
@@ -1266,7 +1458,7 @@ function StudentLessons({
         <aside className="lms-card lms-lesson-menu">
           <div className="lms-lesson-menu-head">
             <h2>Course topics</h2>
-            <p>{visibleLessons.length} lessons available</p>
+            <p>{visibleLessons.length} lessons and materials available</p>
           </div>
           <div className="lms-lesson-menu-list">
             {visibleLessons.map((lesson) => (
@@ -1277,8 +1469,10 @@ function StudentLessons({
                   selected?.id === lesson.id ? 'is-active' : ''
                 } ${lesson.status === 'locked' ? 'is-locked' : ''}`}
                 onClick={() => {
+                  if (lesson.status === 'locked') return
                   setSelectedId(lesson.id)
                 }}
+                disabled={lesson.status === 'locked'}
               >
                 <span
                   className={`lms-lesson-menu-status ${
@@ -1311,7 +1505,7 @@ function StudentLessons({
           </div>
         </aside>
 
-        {selected && (
+        {selected ? (
           <article className="lms-card lms-lesson-reader">
             <div className="lms-lesson-reader-head">
               <div className="lms-reader-meta">
@@ -1334,6 +1528,45 @@ function StudentLessons({
 
             <div className="lms-lesson-content">{selected.content}</div>
 
+            {selected.kind === 'material' &&
+              (selected.attachments || []).map((attachment) => (
+                <div className="lms-presentation-card" key={attachment.fileId}>
+                  <span className="lms-presentation-icon">
+                    <Icon name="fileText" size={20} />
+                  </span>
+                  <div className="lms-presentation-copy">
+                    <strong>{attachment.fileName}</strong>
+                    <span>Shared by your teacher in this class.</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="lms-btn lms-btn-secondary lms-btn-sm"
+                    onClick={() =>
+                      openClassworkAttachment(selected, attachment)
+                    }
+                    disabled={previewingFileId === attachment.fileId}
+                  >
+                    <Icon name="eye" size={14} />
+                    {previewingFileId === attachment.fileId
+                      ? 'Loading preview...'
+                      : 'Preview'}
+                  </button>
+                  <button
+                    type="button"
+                    className="lms-btn lms-btn-secondary lms-btn-sm"
+                    onClick={() =>
+                      onDownloadClassworkAttachment(
+                        selected.classworkId,
+                        attachment,
+                      ).catch((error) => notify(error.message, 'error'))
+                    }
+                  >
+                    <Icon name="download" size={14} />
+                    Download file
+                  </button>
+                </div>
+              ))}
+
             {selected.presentation?.fileId && (
               <div className="lms-presentation-card">
                 <span className="lms-presentation-icon">
@@ -1342,20 +1575,20 @@ function StudentLessons({
                 <div className="lms-presentation-copy">
                   <strong>{selected.presentation.fileName}</strong>
                   <span>
-                    Uploaded by faculty. Preview supported files or download
-                    the attachment to open it with a compatible app.
+                    Uploaded by faculty. Preview in this page or download a copy.
                   </span>
                 </div>
-                {selected.presentation.previewable && (
-                  <button
-                    type="button"
-                    className="lms-btn lms-btn-secondary lms-btn-sm"
-                    onClick={openPresentation}
-                  >
-                    <Icon name="eye" size={14} />
-                    Preview file
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="lms-btn lms-btn-secondary lms-btn-sm"
+                  onClick={openPresentation}
+                  disabled={previewingFileId === selected.id}
+                >
+                  <Icon name="eye" size={14} />
+                  {previewingFileId === selected.id
+                    ? 'Loading preview...'
+                    : 'Preview'}
+                </button>
                 <button
                   type="button"
                   className="lms-btn lms-btn-secondary lms-btn-sm"
@@ -1383,8 +1616,29 @@ function StudentLessons({
               </Link>
             </div>
           </article>
+        ) : (
+          <article className="lms-card lms-lesson-reader">
+            <EmptyState
+              icon="book"
+              title="No lessons or materials yet"
+              description="Published lessons and materials from your enrolled classes will appear here."
+            />
+          </article>
         )}
       </div>
+      {attachmentPreview && (
+        <Modal
+          title={attachmentPreview.fileName}
+          description="Preview of the file shared in this class."
+          onClose={() => setAttachmentPreview(null)}
+          size="lg"
+        >
+          <StudentAttachmentPreview
+            key={attachmentPreview.url}
+            file={attachmentPreview}
+          />
+        </Modal>
+      )}
     </>
   )
 }
@@ -1922,7 +2176,7 @@ function StudentResults({ results }) {
 
       <div className="lms-toolbar">
         <div className="lms-segmented" role="tablist" aria-label="Filter results">
-          {['All', 'Passed', 'Failed', 'Retake available'].map((status) => (
+          {['All', 'Passed', 'Failed'].map((status) => (
             <button
               key={status}
               type="button"
@@ -1999,20 +2253,57 @@ function StudentResults({ results }) {
   )
 }
 
-function StudentProgress({ classes, quizzes, slides }) {
-  const learningProgress = classes.map((learningClass) => ({
-    subjectId: learningClass.id,
-    title: learningClass.className,
-    progress: 0,
-    topics: slides
-      .filter((slide) => slide.classId === learningClass.id)
-      .map((slide) => ({
-        id: slide.id,
+function StudentProgress({ classes, quizzes, slides, results }) {
+  const learningProgress = classes.map((learningClass) => {
+    const classSlides = slides.filter(
+      (slide) => slide.classId === learningClass.id,
+    )
+    const classQuizzes = quizzes.filter(
+      (quiz) =>
+        quiz.classId === learningClass.id && quiz.status !== 'Draft',
+    )
+    const classResults = results.filter(
+      (result) => result.classId === learningClass.id,
+    )
+    const resultsByQuiz = new Map(
+      classResults.map((result) => [result.quizId, result]),
+    )
+    const passedCount = classResults.filter(
+      (result) => result.status === 'Passed',
+    ).length
+    const progress = classQuizzes.length
+      ? Math.round((passedCount / classQuizzes.length) * 100)
+      : 0
+    const topics = [
+      ...classSlides.map((slide) => ({
+        id: `slide-${slide.id}`,
         title: slide.title,
         requirement: 'Published class material',
         state: 'current',
       })),
-  }))
+      ...classQuizzes.map((quiz) => {
+        const result = resultsByQuiz.get(quiz.id)
+        return {
+          id: `quiz-${quiz.id}`,
+          title: quiz.title,
+          requirement: result
+            ? `Quiz · Scored ${result.score}% · Passing ${quiz.passing}%`
+            : `Quiz · Passing ${quiz.passing}%`,
+          state: result
+            ? result.status === 'Passed'
+              ? 'completed'
+              : 'failed'
+            : 'current',
+        }
+      }),
+    ]
+    return {
+      subjectId: learningClass.id,
+      title: learningClass.className,
+      progress,
+      topics,
+    }
+  })
   const studentSubjects = classes
   const [activeSubject, setActiveSubject] = useState(
     learningProgress[0]?.subjectId || '',
@@ -2024,6 +2315,9 @@ function StudentProgress({ classes, quizzes, slides }) {
     learningProgress.reduce((total, subject) => total + subject.progress, 0) /
       Math.max(learningProgress.length, 1),
   )
+  const attemptsPercent = quizzes.length
+    ? Math.round((results.length / quizzes.length) * 100)
+    : 0
   const navigate = useNavigate()
 
   if (!selected) {
@@ -2079,11 +2373,12 @@ function StudentProgress({ classes, quizzes, slides }) {
             <div className="lms-progress-overview-copy">
               <h2>You are {overall}% through your active subjects</h2>
               <p>
-                Published class materials and quizzes are listed below. Progress
-                tracking will be available when submissions are supported.
+                Your progress reflects the quizzes you have passed in each
+                subject, along with the published materials and assessments
+                listed below.
               </p>
-              <Badge tone="neutral" dot>
-                Tracking unavailable
+              <Badge tone={overall === 100 ? 'success' : 'info'} dot>
+                {overall === 100 ? 'Completed' : 'In progress'}
               </Badge>
             </div>
           </div>
@@ -2103,12 +2398,16 @@ function StudentProgress({ classes, quizzes, slides }) {
             </span>
           </div>
           <div style={{ marginTop: 14 }}>
-            <ProgressBar label="Published slide decks" value={0} tone="green" />
+            <ProgressBar
+              label="Quiz attempts recorded"
+              value={Math.min(100, attemptsPercent)}
+              tone="green"
+            />
           </div>
           <div style={{ marginTop: 10 }}>
             <ProgressBar
-              label="Published quizzes"
-              value={Math.min(100, quizzes.length)}
+              label="Quizzes passed"
+              value={overall}
               tone="violet"
             />
           </div>
@@ -2164,7 +2463,9 @@ function StudentProgress({ classes, quizzes, slides }) {
                       ? 'check'
                       : topic.state === 'current'
                         ? 'play'
-                        : 'lock'
+                        : topic.state === 'failed'
+                          ? 'alert'
+                          : 'lock'
                   }
                   size={14}
                 />
@@ -2184,6 +2485,20 @@ function StudentProgress({ classes, quizzes, slides }) {
                         onClick={() => navigate('/student/lessons')}
                       >
                         Review topic
+                      </button>
+                    </>
+                  )}
+                  {topic.state === 'failed' && (
+                    <>
+                      <Badge tone="danger" dot>
+                        Quiz not passed
+                      </Badge>
+                      <button
+                        type="button"
+                        className="lms-link"
+                        onClick={() => navigate('/student/results')}
+                      >
+                        View result
                       </button>
                     </>
                   )}

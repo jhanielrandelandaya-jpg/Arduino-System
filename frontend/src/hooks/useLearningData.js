@@ -53,6 +53,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
   const [slides, setSlides] = useState([])
   const [students, setStudents] = useState([])
   const [classwork, setClasswork] = useState([])
+  const [quizAttempts, setQuizAttempts] = useState([])
   const [activity, setActivity] = useState([])
   const [syncedAt, setSyncedAt] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -81,6 +82,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
       setSlides(Array.isArray(data.slides) ? data.slides : [])
       setStudents(Array.isArray(data.students) ? data.students : [])
       setClasswork(Array.isArray(data.classwork) ? data.classwork : [])
+      setQuizAttempts(Array.isArray(data.attempts) ? data.attempts : [])
       setActivity(Array.isArray(data.activity) ? data.activity : [])
       setSyncedAt(data.syncedAt || new Date().toISOString())
       setError('')
@@ -197,11 +199,11 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
 
   const submitQuizAttempt = useCallback(
     (quizId, answers) =>
-      request(`/quizzes/${encodeURIComponent(quizId)}/attempts`, {
+      mutate(`/quizzes/${encodeURIComponent(quizId)}/attempts`, {
         method: 'POST',
         body: JSON.stringify({ answers }),
       }),
-    [],
+    [mutate],
   )
 
   const createSlide = useCallback(
@@ -374,6 +376,26 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
     [],
   )
 
+  const previewClassworkAttachment = useCallback(
+    async (classworkId, attachment) => {
+      const response = await fetch(
+        `/api/learning/classwork/${encodeURIComponent(classworkId)}/attachments/${encodeURIComponent(attachment.fileId)}?preview=1`,
+        { headers: authHeaders() },
+      )
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.message || 'Could not preview the attachment.')
+      }
+      const blob = await response.blob()
+      return {
+        url: URL.createObjectURL(blob),
+        blob,
+        contentType: response.headers.get('Content-Type') || '',
+      }
+    },
+    [],
+  )
+
   const getClassworkSubmissions = useCallback(async (classworkId) => {
     const data = await request(
       `/classwork/${encodeURIComponent(classworkId)}/submissions`,
@@ -503,12 +525,32 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
     }
   }, [])
 
+  const loadSlideFilePreview = useCallback(async (slideId) => {
+    const response = await fetch(
+      `/api/learning/slides/${encodeURIComponent(slideId)}/presentation?preview=1`,
+      { headers: authHeaders() },
+    )
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}))
+      throw new Error(data.message || 'Could not preview the lesson file.')
+    }
+    const blob = await response.blob()
+    const slide = slides.find((item) => item.id === slideId)
+    return {
+      url: URL.createObjectURL(blob),
+      blob,
+      contentType: response.headers.get('Content-Type') || '',
+      fileName: slide?.content?.[0]?.presentation?.fileName || 'lesson-file',
+    }
+  }, [slides])
+
   return {
     classes,
     quizzes,
     slides,
     students,
     classwork,
+    quizAttempts,
     activity,
     syncedAt,
     loading,
@@ -537,6 +579,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
     deleteClasswork,
     uploadClassworkAttachment,
     downloadClassworkAttachment,
+    previewClassworkAttachment,
     getClassworkSubmissions,
     submitClasswork,
     gradeClassworkSubmission,
@@ -544,5 +587,6 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
     uploadSlideFile,
     downloadSlideFile,
     previewSlideFile,
+    loadSlideFilePreview,
   }
 }

@@ -625,11 +625,45 @@ test('classwork APIs enforce ownership, enrollment, submissions, grading, and at
   )
   assert.equal(fileResponse.status, 200)
   assert.equal(await fileResponse.text(), 'assignment instructions')
+  const previewResponse = await fetch(
+    `${origin}/api/learning/classwork/${classworkId}/attachments/${attachment.body.attachment.fileId}?preview=1`,
+    { headers: { Authorization: 'Be' + 'arer ' + tokenFor(users.studentA) } },
+  )
+  assert.equal(previewResponse.status, 200)
+  assert.match(previewResponse.headers.get('content-type'), /text\/plain/)
+  assert.match(previewResponse.headers.get('content-disposition'), /^inline;/)
+  assert.equal(await previewResponse.text(), 'assignment instructions')
   const blockedFile = await fetch(
     `${origin}/api/learning/classwork/${classworkId}/attachments/${attachment.body.attachment.fileId}`,
     { headers: { Authorization: 'Be' + 'arer ' + tokenFor(users.studentB) } },
   )
   assert.equal(blockedFile.status, 404)
+  const blockedPreview = await fetch(
+    `${origin}/api/learning/classwork/${classworkId}/attachments/${attachment.body.attachment.fileId}?preview=1`,
+    { headers: { Authorization: 'Be' + 'arer ' + tokenFor(users.studentB) } },
+  )
+  assert.equal(blockedPreview.status, 404)
+
+  const unsupportedPreviewForm = new FormData()
+  unsupportedPreviewForm.append(
+    'file',
+    new Blob(['not a PDF'], { type: 'application/pdf' }),
+    'notes.pdf',
+  )
+  const unsupportedAttachment = await request(
+    `/api/learning/classwork/${classworkId}/attachments`,
+    users.facultyA,
+    { method: 'POST', body: unsupportedPreviewForm },
+  )
+  assert.equal(unsupportedAttachment.status, 201)
+  const genericPreview = await fetch(
+    `${origin}/api/learning/classwork/${classworkId}/attachments/${unsupportedAttachment.body.attachment.fileId}?preview=1`,
+    { headers: { Authorization: 'Be' + 'arer ' + tokenFor(users.studentA) } },
+  )
+  assert.equal(genericPreview.status, 200)
+  assert.equal(genericPreview.headers.get('content-type'), 'application/octet-stream')
+  assert.match(genericPreview.headers.get('content-disposition'), /^inline;/)
+  assert.equal(await genericPreview.text(), 'not a PDF')
 
   const submissionForm = new FormData()
   submissionForm.append('text', 'My assignment response')
@@ -886,6 +920,12 @@ test('students can only answer teacher quizzes and never receive answer keys', a
   )
   assert.equal(studentQuizAfterAttempt.attemptsUsed, 1)
   assert.equal(studentQuizAfterAttempt.bestScore, 100)
+  assert.equal(studentDashboardAfterAttempt.body.attempts.length, 1)
+  assert.equal(
+    studentDashboardAfterAttempt.body.attempts[0].quizId,
+    'quiz-a-published',
+  )
+  assert.equal(studentDashboardAfterAttempt.body.attempts[0].passed, true)
 
   const facultyScores = await request(
     `/api/faculty/classes/${classes.a}/quiz-attempts`,
@@ -922,17 +962,11 @@ test('students can only answer teacher quizzes and never receive answer keys', a
       body: JSON.stringify({ answers: { choice: 0, multiple: [], short: '', dropdown: '1' } }),
     },
   )
-  assert.equal(secondAttempt.status, 201)
-  assert.equal(secondAttempt.body.attemptsUsed, 2)
-  const exhaustedAttempt = await request(
-    '/api/learning/quizzes/quiz-a-published/attempts',
-    users.studentA,
-    {
-      method: 'POST',
-      body: JSON.stringify({ answers: {} }),
-    },
+  assert.equal(secondAttempt.status, 409)
+  assert.equal(
+    secondAttempt.body.message,
+    'This quiz can only be taken once.',
   )
-  assert.equal(exhaustedAttempt.status, 409)
 
   assert.equal(
     (
@@ -1016,7 +1050,7 @@ test('faculty can attach any file type and students can download or preview supp
   )
   assert.equal(documentUpload.status, 201)
   assert.equal(documentUpload.body.presentation.fileName, 'lesson-notes.docx')
-  assert.equal(documentUpload.body.presentation.previewable, false)
+  assert.equal(documentUpload.body.presentation.previewable, true)
   const studentDashboard = await request(
     '/api/student/dashboard',
     users.studentA,
@@ -1046,7 +1080,16 @@ test('faculty can attach any file type and students can download or preview supp
     `${origin}/api/learning/slides/slide-a-document/presentation?preview=1`,
     { headers: { Authorization: `Bearer ${tokenFor(users.studentA)}` } },
   )
-  assert.equal(unsupportedPreview.status, 415)
+  assert.equal(unsupportedPreview.status, 200)
+  assert.equal(
+    unsupportedPreview.headers.get('content-type'),
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  )
+  assert.match(unsupportedPreview.headers.get('content-disposition'), /^inline;/)
+  assert.deepEqual(
+    [...new Uint8Array(await unsupportedPreview.arrayBuffer())],
+    [...documentBytes],
+  )
 
   const pdfBytes = Buffer.from('%PDF-1.7\nLesson preview')
   const pdfForm = new FormData()

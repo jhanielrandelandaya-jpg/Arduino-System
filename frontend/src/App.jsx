@@ -5,7 +5,7 @@ import {
   Route,
   Routes,
 } from 'react-router-dom'
-import AuthPage from './auth/AuthPage.jsx'
+import LoginPage from './auth/LoginPage.jsx'
 import StudentDashboard from './dashboard/StudentDashboard.jsx'
 import FacultyDashboard from './dashboard/FacultyDashboard.jsx'
 import './App.css'
@@ -141,7 +141,7 @@ function App() {
             user ? (
               <Navigate to={dashboardPath} replace />
             ) : (
-              <AuthPage mode="login" onAuthenticated={handleAuthenticated} />
+              <LoginPage mode="login" onAuthenticated={handleAuthenticated} />
             )
           }
         />
@@ -151,7 +151,7 @@ function App() {
             user ? (
               <Navigate to={dashboardPath} replace />
             ) : (
-              <AuthPage mode="register" onAuthenticated={handleAuthenticated} />
+              <LoginPage mode="register" onAuthenticated={handleAuthenticated} />
             )
           }
         />

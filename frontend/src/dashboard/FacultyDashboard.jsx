@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Link,
   Navigate,
@@ -26,6 +26,7 @@ import PresentationLibrary from '../presentation/PresentationLibrary.jsx'
 import PresentationViewer from '../presentation/PresentationViewer.jsx'
 import { ensurePresentationForLesson } from '../presentation/presentationStore.js'
 import ClassroomWorkspace from './ClassroomWorkspace.jsx'
+import StudentAttachmentPreview from './StudentAttachmentPreview.jsx'
 
 function FacultyDashboard({ user, onLogout, onUserUpdate }) {
   return (
@@ -66,10 +67,13 @@ function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
     deleteClasswork,
     uploadClassworkAttachment,
     downloadClassworkAttachment,
+    previewClassworkAttachment,
     getClassworkSubmissions,
     gradeClassworkSubmission,
     downloadSubmissionFile,
     uploadSlideFile,
+    downloadSlideFile,
+    loadSlideFilePreview,
     loading,
     error,
     refresh,
@@ -244,9 +248,12 @@ function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
               deleteClasswork={deleteClasswork}
               uploadClassworkAttachment={uploadClassworkAttachment}
               downloadClassworkAttachment={downloadClassworkAttachment}
+              previewClassworkAttachment={previewClassworkAttachment}
               getClassworkSubmissions={getClassworkSubmissions}
               gradeClassworkSubmission={gradeClassworkSubmission}
               downloadSubmissionFile={downloadSubmissionFile}
+              downloadSlideFile={downloadSlideFile}
+              loadSlideFilePreview={loadSlideFilePreview}
             />
           }
         />
@@ -258,6 +265,7 @@ function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
               subjects={subjects}
               onSave={saveLesson}
               onToggleStatus={toggleLessonStatus}
+              onPreviewLessonFile={loadSlideFilePreview}
               userId={user.id}
             />
           }
@@ -722,9 +730,12 @@ function SubjectManagement({
   deleteClasswork,
   uploadClassworkAttachment,
   downloadClassworkAttachment,
+  previewClassworkAttachment,
   getClassworkSubmissions,
   gradeClassworkSubmission,
   downloadSubmissionFile,
+  downloadSlideFile,
+  loadSlideFilePreview,
 }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const [search, setSearch] = useState(() => searchParams.get('q') || '')
@@ -807,9 +818,12 @@ function SubjectManagement({
           deleteClasswork={deleteClasswork}
           uploadClassworkAttachment={uploadClassworkAttachment}
           downloadClassworkAttachment={downloadClassworkAttachment}
+          onPreviewAttachment={previewClassworkAttachment}
           getClassworkSubmissions={getClassworkSubmissions}
           gradeClassworkSubmission={gradeClassworkSubmission}
           downloadSubmissionFile={downloadSubmissionFile}
+          onDownloadFile={downloadSlideFile}
+          onPreviewFile={loadSlideFilePreview}
           getStudents={onViewStudents}
           onViewScores={openScores}
           onClose={closeWorkspace}
@@ -1184,6 +1198,7 @@ function SubjectFormModal({ subject, onClose, onSave }) {
           >
             <option>First Semester</option>
             <option>Second Semester</option>
+            <option>Third Semester</option>
             <option>Summer Term</option>
           </select>
         </Field>
@@ -1218,16 +1233,45 @@ function SubjectFormModal({ subject, onClose, onSave }) {
   )
 }
 
-function LessonManagement({ lessons, subjects, onSave, onToggleStatus, userId }) {
+function LessonManagement({
+  lessons,
+  subjects,
+  onSave,
+  onToggleStatus,
+  onPreviewLessonFile,
+  userId,
+}) {
   const navigate = useNavigate()
+  const notify = useToast()
   const [searchParams] = useSearchParams()
   const [search, setSearch] = useState('')
   const [subjectFilter, setSubjectFilter] = useState('All')
+  const [filePreview, setFilePreview] = useState(null)
+  const [previewingLessonId, setPreviewingLessonId] = useState('')
   const [editing, setEditing] = useState(() =>
     searchParams.get('create') === '1'
       ? { subjectId: searchParams.get('classId') || '' }
       : null,
   )
+
+  useEffect(
+    () => () => {
+      if (filePreview?.url) URL.revokeObjectURL(filePreview.url)
+    },
+    [filePreview],
+  )
+
+  const previewLessonFile = async (lesson) => {
+    if (!onPreviewLessonFile || !lesson.presentation?.fileId) return
+    setPreviewingLessonId(lesson.id)
+    try {
+      setFilePreview(await onPreviewLessonFile(lesson.id))
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setPreviewingLessonId('')
+    }
+  }
 
   const filtered = lessons.filter((lesson) => {
     const matchesSearch = `${lesson.title} ${lesson.subjectCode}`
@@ -1351,6 +1395,18 @@ function LessonManagement({ lessons, subjects, onSave, onToggleStatus, userId })
                     >
                       <Icon name="layers" size={14} />
                     </button>
+                    {lesson.presentation?.fileId && onPreviewLessonFile && (
+                      <button
+                        type="button"
+                        className="lms-icon-btn"
+                        onClick={() => previewLessonFile(lesson)}
+                        disabled={previewingLessonId === lesson.id}
+                        aria-label={`Preview file for ${lesson.title}`}
+                        title="Preview file"
+                      >
+                        <Icon name="fileText" size={14} />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="lms-icon-btn"
@@ -1395,6 +1451,20 @@ function LessonManagement({ lessons, subjects, onSave, onToggleStatus, userId })
             setEditing(null)
           }}
         />
+      )}
+
+      {filePreview && (
+        <Modal
+          title={filePreview.fileName || 'File preview'}
+          description="Preview of the file uploaded for this lesson."
+          onClose={() => setFilePreview(null)}
+          size="lg"
+        >
+          <StudentAttachmentPreview
+            key={filePreview.url}
+            file={filePreview}
+          />
+        </Modal>
       )}
     </>
   )
@@ -1729,7 +1799,7 @@ function QuizFormModal({ quiz, subjects, onClose, onSave }) {
                   (['short_answer', 'paragraph'].includes(type) ? '' : 0),
           }
         })
-      : [blankQuestion()],
+      : Array.from({ length: 10 }, () => blankQuestion()),
   )
 
   const update = (field, value) =>

@@ -17,12 +17,6 @@ const navigation = {
         { label: 'Overview', to: '/student/dashboard', icon: 'grid' },
         { label: 'My Classes', to: '/student/subjects', icon: 'book' },
         { label: 'Lessons', to: '/student/lessons', icon: 'presentation' },
-        {
-          label: 'Presentations',
-          to: '/student/presentations',
-          icon: 'layers',
-          nested: true,
-        },
         { label: 'My Notes', to: '/student/notes', icon: 'notes' },
       ],
     },
@@ -227,64 +221,27 @@ function DashboardLayout({ role, user, onLogout, onUserUpdate, children }) {
         </nav>
 
         <div className="lms-sidebar-bottom">
-          {role === 'Student' ? (
-            <>
-              <div className="lms-promo-card">
-                <span className="lms-promo-icon">
-                  <Icon name="sparkles" size={16} />
-                </span>
-                <strong>Unlock Premium Access</strong>
-                <p>Teacher-shared quizzes, offline notes, and priority support.</p>
-                <button
-                  type="button"
-                  className="lms-promo-btn"
-                  onClick={() => notify('Premium plans are coming soon.')}
-                >
-                  Upgrade Pro
-                  <Icon name="arrowRight" size={13} />
-                </button>
-              </div>
-
-              <div className="lms-sidebar-utility">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSidebarOpen(false)
-                    setSettingsOpen(true)
-                  }}
-                >
-                  <Icon name="settings" size={16} />
-                  Settings
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSidebarOpen(false)
-                    setHelpOpen(true)
-                  }}
-                >
-                  <Icon name="help" size={16} />
-                  Help Center
-                </button>
-              </div>
-            </>
-          ) : (
-            <div className="lms-promo-card lms-promo-faculty">
-              <span className="lms-promo-icon">
-                <Icon name="sparkles" size={16} />
-              </span>
-              <strong>Upgrade to Pro</strong>
-              <p>
-                Advanced class analytics, bulk grading, and priority faculty
-                support.
-              </p>
+          {role === 'Student' && (
+            <div className="lms-sidebar-utility">
               <button
                 type="button"
-                className="lms-promo-btn"
-                onClick={() => notify('Faculty Pro plans are coming soon.')}
+                onClick={() => {
+                  setSidebarOpen(false)
+                  setSettingsOpen(true)
+                }}
               >
-                Upgrade Pro
-                <Icon name="arrowRight" size={13} />
+                <Icon name="settings" size={16} />
+                Settings
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSidebarOpen(false)
+                  setHelpOpen(true)
+                }}
+              >
+                <Icon name="help" size={16} />
+                Help Center
               </button>
             </div>
           )}

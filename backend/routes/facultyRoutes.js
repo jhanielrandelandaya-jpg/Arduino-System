@@ -29,7 +29,7 @@ router.get('/dashboard', requireAuth, requireRole('Faculty'), (req, res) => {
       .prepare(`${QUIZ_SELECT} WHERE c.faculty_id = ? ORDER BY q.created_date DESC`)
       .all(req.userId)
     const slides = db
-      .prepare(`${SLIDE_SELECT} WHERE c.faculty_id = ? ORDER BY s.created_date DESC`)
+      .prepare(`${SLIDE_SELECT} WHERE c.faculty_id = ? ORDER BY s.created_date ASC`)
       .all(req.userId)
     const classwork = db.prepare(`
       ${CLASSWORK_SELECT}

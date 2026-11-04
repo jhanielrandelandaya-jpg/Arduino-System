@@ -92,13 +92,6 @@ const quickLinks = {
       tone: 'teal',
     },
     {
-      label: 'Presentations',
-      subtitle: 'View shared slide decks',
-      path: '/student/presentations',
-      icon: 'layers',
-      tone: 'violet',
-    },
-    {
       label: 'My Notes',
       subtitle: 'Review your saved notes',
       path: '/student/notes',
