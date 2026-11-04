@@ -1,6 +1,5 @@
-const crypto = require('crypto')
-const jwt = require('jsonwebtoken')
-const db = require('../config/database')
+﻿const jwt = require('jsonwebtoken')
+const { getDatabase } = require('../config/database')
 const { hashPassword, verifyPassword } = require('../utils/password')
 const {
   ensureUserSettings,
@@ -22,6 +21,19 @@ const sanitizeUser = (user) => ({
 
 const createToken = (user) =>
   jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: jwtExpiresIn })
+
+const findUserByUsername = async (username, excludeId) => {
+  const database = await getDatabase()
+  const pattern = new RegExp(
+    `^${username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+    'i',
+  )
+  const filter = { username: pattern }
+  if (excludeId) {
+    filter.id = { $ne: excludeId }
+  }
+  return database.collection('users').findOne(filter)
+}
 
 const register = async (req, res) => {
   const { fullName, username, password, role } = req.body || {}
@@ -64,10 +76,7 @@ const register = async (req, res) => {
   }
 
   try {
-    const exists = db
-      .prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)')
-      .get(cleanUsername)
-
+    const exists = await findUserByUsername(cleanUsername)
     if (exists) {
       return res.status(409).json({
         message: 'An account with that username or email already exists.',
@@ -80,16 +89,23 @@ const register = async (req, res) => {
       username: cleanUsername,
       password_hash: hashPassword(cleanPassword),
       role: cleanRole,
+      created_at: new Date().toISOString(),
     }
 
-    db.prepare(
-      `INSERT INTO users (id, full_name, username, password_hash, role)
-       VALUES (@id, @full_name, @username, @password_hash, @role)`,
-    ).run(user)
+    const database = await getDatabase()
+    await database.collection('users').insertOne({
+      _id: user.id,
+      id: user.id,
+      full_name: user.full_name,
+      username: user.username,
+      password_hash: user.password_hash,
+      role: user.role,
+      created_at: user.created_at,
+    })
 
-    const created = db
-      .prepare('SELECT id, full_name, username, role, created_at FROM users WHERE id = ?')
-      .get(user.id)
+    const created = await database
+      .collection('users')
+      .findOne({ id: user.id })
 
     return res.status(201).json({
       message: 'Account created successfully.',
@@ -117,16 +133,18 @@ const login = async (req, res) => {
   }
 
   try {
-    const user = db
-      .prepare(
-        'SELECT id, full_name, username, role, password_hash, created_at FROM users WHERE LOWER(username) = LOWER(?)',
-      )
-      .get(cleanUsername)
+    const database = await getDatabase()
+    const user = await database
+      .collection('users')
+      .findOne({
+        username: new RegExp(
+          `^${cleanUsername.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+          'i',
+        ),
+      })
 
     if (!user || !verifyPassword(cleanPassword, user.password_hash)) {
-      return res
-        .status(401)
-        .json({ message: 'Invalid username, email, or password.' })
+      return res.status(401).json({ message: 'Invalid username, email, or password.' })
     }
 
     return res.json({
@@ -144,11 +162,10 @@ const login = async (req, res) => {
 
 const getMe = async (req, res) => {
   try {
-    const user = db
-      .prepare(
-        'SELECT id, full_name, username, role, created_at FROM users WHERE id = ?',
-      )
-      .get(req.userId)
+    const database = await getDatabase()
+    const user = await database
+      .collection('users')
+      .findOne({ id: req.userId })
 
     if (!user) {
       return res.status(401).json({ message: 'Account not found.' })
@@ -195,29 +212,22 @@ const updateProfile = async (req, res) => {
   }
 
   try {
-    const exists = db
-      .prepare(
-        'SELECT id FROM users WHERE LOWER(username) = LOWER(?) AND id != ?',
-      )
-      .get(cleanUsername, req.userId)
-
+    const exists = await findUserByUsername(cleanUsername, req.userId)
     if (exists) {
       return res.status(409).json({
         message: 'An account with that username or email already exists.',
       })
     }
 
-    db.prepare('UPDATE users SET full_name = ?, username = ? WHERE id = ?').run(
-      cleanName,
-      cleanUsername,
-      req.userId,
+    const database = await getDatabase()
+    await database.collection('users').updateOne(
+      { id: req.userId },
+      { $set: { full_name: cleanName, username: cleanUsername } },
     )
 
-    const updated = db
-      .prepare(
-        'SELECT id, full_name, username, role, created_at FROM users WHERE id = ?',
-      )
-      .get(req.userId)
+    const updated = await database
+      .collection('users')
+      .findOne({ id: req.userId })
 
     return res.json({
       message: 'Profile updated.',
@@ -256,9 +266,10 @@ const changePassword = async (req, res) => {
   }
 
   try {
-    const user = db
-      .prepare('SELECT password_hash FROM users WHERE id = ?')
-      .get(req.userId)
+    const database = await getDatabase()
+    const user = await database
+      .collection('users')
+      .findOne({ id: req.userId })
 
     if (!user || !verifyPassword(cleanCurrent, user.password_hash)) {
       return res
@@ -266,9 +277,9 @@ const changePassword = async (req, res) => {
         .json({ message: 'Your current password is incorrect.' })
     }
 
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(
-      hashPassword(cleanNew),
-      req.userId,
+    await database.collection('users').updateOne(
+      { id: req.userId },
+      { $set: { password_hash: hashPassword(cleanNew) } },
     )
 
     return res.json({ message: 'Password updated successfully.' })
@@ -282,7 +293,7 @@ const changePassword = async (req, res) => {
 
 const getSettings = async (req, res) => {
   try {
-    const settings = ensureUserSettings(req.userId)
+    const settings = await ensureUserSettings(req.userId)
     return res.json({ settings: mapUserSettings(settings) })
   } catch (error) {
     console.error('Load settings error:', error)
@@ -296,7 +307,8 @@ const updateSettings = async (req, res) => {
   const body = req.body || {}
 
   try {
-    const current = ensureUserSettings(req.userId)
+    const database = await getDatabase()
+    const current = await ensureUserSettings(req.userId)
     const next = {
       classUpdates:
         typeof body.classUpdates === 'boolean'
@@ -312,18 +324,16 @@ const updateSettings = async (req, res) => {
           : Boolean(current.notify_reminders),
     }
 
-    db.prepare(`
-      UPDATE user_settings SET
-        notify_classes = ?,
-        notify_quizzes = ?,
-        notify_reminders = ?,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).run(
-      next.classUpdates ? 1 : 0,
-      next.quizUpdates ? 1 : 0,
-      next.reminders ? 1 : 0,
-      req.userId,
+    await database.collection('user_settings').updateOne(
+      { user_id: req.userId },
+      {
+        $set: {
+          notify_classes: next.classUpdates,
+          notify_quizzes: next.quizUpdates,
+          notify_reminders: next.reminders,
+          updated_at: new Date().toISOString(),
+        },
+      },
     )
 
     return res.json({

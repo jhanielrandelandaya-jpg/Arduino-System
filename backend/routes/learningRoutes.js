@@ -1,598 +1,415 @@
+﻿const path = require('path')
+const fs = require('fs')
 const crypto = require('crypto')
 const express = require('express')
-const fs = require('fs')
-const path = require('path')
 const multer = require('multer')
-const db = require('../config/database')
+const { getDatabase } = require('../config/database')
 const { requireAuth, requireRole } = require('../middleware/authMiddleware')
-const {
-  requireClassAccess,
-  requireClassOwner,
-} = require('../middleware/classAccessMiddleware')
-const {
-  CLASS_SELECT,
-  STUDENT_CLASS_SELECT,
-  QUIZ_SELECT,
-  SLIDE_SELECT,
-  CLASSWORK_SELECT,
-  safeJsonArray,
-  mapClass,
-  mapQuiz,
-  mapSlide,
-  mapClasswork,
-  mapActivity,
-} = require('../utils/learningData')
-
-const router = express.Router()
-const presentationDirectory = path.join(path.dirname(db.name), 'presentations')
-const classworkDirectory = path.join(path.dirname(db.name), 'classwork-files')
-const submissionDirectory = path.join(path.dirname(db.name), 'submission-files')
-const presentationUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024, files: 1 },
-})
-const classworkUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024, files: 1 },
-})
-const submissionUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024, files: 1 },
-})
-const runPresentationUpload = (req, res, next) => {
-  presentationUpload.single('presentation')(req, res, (error) => {
-    if (error) {
-      return res.status(400).json({
-        message:
-          error.code === 'LIMIT_FILE_SIZE'
-            ? 'Files must be 25 MB or smaller.'
-            : 'Could not receive the file.',
-      })
+const { requireClassOwner, requireActiveEnrollment, requireClassAccess, requireClassworkOwner, requireClassworkAccess, requireSlideOwner, requireSlideAccess, requireQuizOwner, requireQuizAccess } = require('../middleware/classAccessMiddleware')
+const { quizFields } = require('../utils/learningData')
+const classworkUpload = multer({ storage: multer.memoryStorage() })
+const submissionUpload = multer({ storage: multer.memoryStorage() })
+const receiveUpload = (upload, field) => (req, res, next) => {
+  upload.single(field)(req, res, (err) => {
+    if (err) {
+      console.error('Upload error:', err)
+      if (!res.headersSent) {
+        return res.status(400).json({ message: 'File upload failed.' })
+      }
+      return next(err)
     }
     return next()
   })
 }
-const receiveUpload = (upload, fieldName) => (req, res, next) => {
-  upload.single(fieldName)(req, res, (error) => {
-    if (error) {
-      return res.status(400).json({
-        message:
-          error.code === 'LIMIT_FILE_SIZE'
-            ? 'Files must be 25 MB or smaller.'
-            : 'Could not receive the file.',
-      })
-    }
-    return next()
-  })
-}
-
-const getFaculty = (userId) =>
-  db.prepare('SELECT id, full_name FROM users WHERE id = ?').get(userId)
-
-const recordActivity = ({
-  action,
-  entityType,
-  entityId,
-  message,
-  faculty,
-  classId = null,
-  quizId = null,
-}) => {
-  db.prepare(`
-    INSERT INTO activity_logs
-      (id, action, entity_type, entity_id, message, actor_id, actor_name,
-       class_id, quiz_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    crypto.randomUUID(),
-    action,
-    entityType,
-    entityId,
-    message,
-    faculty.id,
-    faculty.full_name,
-    classId,
-    quizId,
-  )
-}
-
-const createClassCode = (subjectCode) => {
-  const base =
-    String(subjectCode || 'CLASS')
-      .replace(/[^a-z0-9]/gi, '')
-      .toUpperCase()
-      .slice(0, 10) || 'CLASS'
-  const suffix = crypto.randomBytes(3).toString('hex').toUpperCase().slice(0, 5)
-  return `${base}-${suffix}`
-}
-
-const JOIN_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-const createJoinCode = () =>
-  Array.from(
-    { length: 8 },
-    () => JOIN_CODE_ALPHABET[crypto.randomInt(JOIN_CODE_ALPHABET.length)],
-  ).join('')
-
-const classFields = (body, current = {}) => ({
-  className:
-    typeof body.className === 'string'
-      ? body.className.trim()
-      : current.class_name,
-  subject:
-    typeof body.subject === 'string' ? body.subject.trim() : current.subject,
-  subjectCode:
-    typeof body.subjectCode === 'string'
-      ? body.subjectCode.trim()
-      : current.subject_code,
-  term: typeof body.term === 'string' ? body.term.trim() : current.term || '',
-  academicYear:
-    typeof body.academicYear === 'string'
-      ? body.academicYear.trim()
-      : current.academic_year || '',
-  description:
-    typeof body.description === 'string'
-      ? body.description.trim()
-      : current.description || '',
-  status: ['Published', 'Draft', 'Archived'].includes(body.status)
-    ? body.status
-    : current.status || 'Published',
-  accent:
-    typeof body.accent === 'string' && body.accent.trim()
-      ? body.accent.trim()
-      : current.accent || 'blue',
-})
-
-const quizFields = (body, current = {}) => {
-  const questionList = Array.isArray(body.questionList)
-    ? body.questionList
-    : safeJsonArray(current.questions_json)
-  const questionCount = Number(body.questions)
-
-  return {
-    quizTitle:
-      typeof body.quizTitle === 'string'
-        ? body.quizTitle.trim()
-        : typeof body.title === 'string'
-          ? body.title.trim()
-          : current.quiz_title,
-    classId:
-      typeof body.classId === 'string'
-        ? body.classId
-        : typeof body.subjectId === 'string'
-          ? body.subjectId
-          : current.class_id,
-    dueDate:
-      typeof body.dueDate === 'string'
-        ? body.dueDate.trim()
-        : typeof body.due === 'string'
-          ? body.due.trim()
-          : current.due_date || '',
-    status: ['Published', 'Draft'].includes(body.status)
-      ? body.status
-      : current.status || 'Draft',
-    timeLimit: Number.isFinite(Number(body.timeLimit))
-      ? Number(body.timeLimit)
-      : current.time_limit || 15,
-    maxScore: Number.isFinite(Number(body.maxScore))
-      ? Number(body.maxScore)
-      : current.max_score || 100,
-    passing: Number.isFinite(Number(body.passing))
-      ? Number(body.passing)
-      : current.passing || 75,
-    questions: Number.isFinite(questionCount)
-      ? questionCount
-      : current.questions || questionList.length || 1,
-    attemptsAllowed: 1,
-    questionList,
-  }
-}
-
-const ownerClass = (classId, facultyId) =>
-  db
-    .prepare('SELECT * FROM classes WHERE id = ? AND faculty_id = ?')
-    .get(classId, facultyId)
-
-const requireClassworkOwner = (classworkIdParam = 'id') => (req, res, next) => {
+const slideUpload = multer({ storage: multer.memoryStorage() })
+const learningDirectory = process.env.LEARNING_DATA_DIR || path.join(__dirname, '..', 'learningData')
+const classworkDirectory = process.env.CLASSWORK_DATA_DIR || path.join(learningDirectory, 'classwork')
+const submissionDirectory = process.env.SUBMISSION_DATA_DIR || path.join(learningDirectory, 'submissions')
+const safeJsonArray = (value) => {
+  if (!value) return []
+  if (Array.isArray(value)) return value
   try {
-    const classwork = db.prepare(`
-      SELECT w.*, c.class_name, c.subject_code, c.faculty_id
-      FROM classwork w
-      JOIN classes c ON c.id = w.class_id
-      WHERE w.id = ? AND c.faculty_id = ?
-    `).get(req.params[classworkIdParam], req.userId)
-    if (!classwork) {
-      return res.status(404).json({ message: 'Classwork not found.' })
-    }
-    req.classwork = classwork
-    req.classId = classwork.class_id
-    return next()
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed : []
   } catch (error) {
-    console.error('Classwork ownership check error:', error)
-    return res.status(500).json({ message: 'Could not verify classwork access.' })
+    return []
   }
 }
-
-const requireClassworkAccess = (classworkIdParam = 'id') => (req, res, next) => {
-  try {
-    const classwork = db.prepare(`
-      SELECT w.*, c.class_name, c.subject_code, c.faculty_id, c.status AS class_status
-      FROM classwork w
-      JOIN classes c ON c.id = w.class_id
-      WHERE w.id = ? AND (
-        (c.faculty_id = ? AND ? = 'Faculty')
-        OR (
-          c.status = 'Published' AND ? = 'Student'
-          AND EXISTS (
-            SELECT 1 FROM enrollments e
-            WHERE e.class_id = c.id AND e.student_id = ? AND e.status = 'Active'
-          )
-        )
-      )
-    `).get(
-      req.params[classworkIdParam],
-      req.userId,
-      req.userRole,
-      req.userRole,
-      req.userId,
-    )
-    if (!classwork) {
-      return res.status(404).json({ message: 'Classwork not found.' })
-    }
-    if (req.userRole === 'Student' && classwork.status !== 'Published') {
-      return res.status(404).json({ message: 'Classwork not found.' })
-    }
-    req.classwork = classwork
-    req.classId = classwork.class_id
-    return next()
-  } catch (error) {
-    console.error('Classwork access check error:', error)
-    return res.status(500).json({ message: 'Could not verify classwork access.' })
-  }
+const isStoredFileId = (value) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+const safeUploadName = (name) => {
+  const base = path.basename(String(name || 'file'))
+  const safe = base.replace(/[^A-Za-z0-9._-]/g, '_')
+  return safe.length > 80 ? `${safe.slice(0, 77)}${safe.slice(-3)}` : safe
 }
-
-const safeUploadName = (value) =>
-  String(value || 'attachment')
-    .split(/[\\/]/)
-    .pop()
-    .replace(/[\u0000-\u001f\u007f]/g, '')
-    .trim()
-    .slice(0, 255) || 'attachment'
-
-const isStoredFileId = (value) =>
-  typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value)
-
-const removeStoredFile = (directory, fileId, label) => {
-  if (!isStoredFileId(fileId)) return
-  const filePath = path.join(directory, fileId)
+const removeStoredFile = (directory, fileId, kind) => {
   try {
+    if (!fileId || !isStoredFileId(fileId)) return
+    const filePath = path.join(directory, fileId)
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
   } catch (error) {
-    console.error(`Remove ${label} file error:`, error)
+    console.error(`Remove stored ${kind} failed:`, error)
   }
 }
-
-const mapAnnouncement = (row, comments = []) => ({
+const mapAnnouncement = (row) => ({
   id: row.id,
-  message: row.message,
-  createdAt: row.createdAt,
-  authorName: row.authorName,
-  comments,
+  classId: row.class_id,
+  teacherId: row.teacher_id || row.faculty_id,
+  teacherName: row.teacher_name || row.faculty_name || '',
+  title: row.title,
+  body: row.body,
+  created_at: row.created_at || row.created_date,
+  author_id: row.author_id,
+  author_name: row.author_name,
+  comments: safeJsonArray(row.comment_json)
+    .map((comment) => ({
+      id: comment.id,
+      author_id: comment.author_id,
+      author_name: comment.author_name,
+      text: comment.text,
+      created_at: comment.created_at || comment.created_date,
+    }))
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))),
 })
-
-const scopeForRole = (role, alias = 'c') =>
-  role === 'Faculty'
-    ? `${alias}.faculty_id = ?`
-    : `${alias}.status = 'Published' AND EXISTS (
-        SELECT 1 FROM enrollments e
-        WHERE e.class_id = ${alias}.id
-          AND e.student_id = ?
-          AND e.status = 'Active'
-      )`
-
-const isCorrectAnswer = (question, submitted) => {
-  const type = question.type || 'multiple_choice'
-  if (type === 'checkboxes') {
-    const expected = Array.isArray(question.answer)
-      ? question.answer.map(Number).sort((a, b) => a - b)
-      : []
-    const actual = Array.isArray(submitted)
-      ? submitted.map(Number).sort((a, b) => a - b)
-      : []
-    return (
-      expected.length > 0 &&
-      expected.length === actual.length &&
-      expected.every((value, index) => value === actual[index])
-    )
+const isCorrectAnswer = (answer, question) => {
+  if (typeof answer === 'string' && typeof question.correct_answer === 'string') {
+    return answer.trim().toLowerCase() === question.correct_answer.trim().toLowerCase()
   }
-  if (type === 'short_answer' || type === 'paragraph') {
-    return (
-      typeof submitted === 'string' &&
-      typeof question.answer === 'string' &&
-      submitted.trim().toLocaleLowerCase() ===
-        question.answer.trim().toLocaleLowerCase()
-    )
-  }
-  return String(submitted) === String(question.answer)
+  return answer === question.correct_answer
 }
-
-const requireSlideOwner = (req, res, next) => {
+const presentationForSlide = (slide) => {
+  const presentations = safeJsonArray(slide.presentation_json)
+  const fileId = presentations.length > 0 ? presentations[presentations.length - 1].fileId : null
+  if (!fileId || !isStoredFileId(fileId)) return null
+  const directory = process.env.SLIDE_DATA_DIR || path.join(learningDirectory, 'slides')
+  const filePath = path.join(directory, fileId)
+  if (!fs.existsSync(filePath)) return null
+  return { fileId, fileName: safeUploadName(presentations[presentations.length - 1].fileName || 'slide.pdf'), mimeType: presentations[presentations.length - 1].mimeType || 'application/pdf', filePath }
+}
+const removePresentationFile = (presentation) => {
   try {
-    const slide = db
-      .prepare(`
-        SELECT s.id FROM slides s
-        JOIN classes c ON c.id = s.class_id
-        WHERE s.id = ? AND c.faculty_id = ?
-      `)
-      .get(req.params.id, req.userId)
-    if (!slide) return res.status(404).json({ message: 'Lesson not found.' })
+    if (!presentation) return
+    removeStoredFile(process.env.SLIDE_DATA_DIR || path.join(learningDirectory, 'slides'), presentation.fileId, 'slide presentation')
+  } catch (error) {
+    console.error('Remove slide presentation failed:', error)
+  }
+}
+const previewMimeForFile = (extension, prefix) => {
+  const buffer = Buffer.from(prefix || [])
+  const isPdf = buffer.subarray(0, 5).toString('latin1') === '%PDF-'
+  const isPng = buffer.subarray(0, 8).toString('latin1') === '\u0089PNG\r\n\u001a\u000a'
+  const isJpg = buffer.subarray(0, 2).toString('latin1') === '\u00FF\u00D8'
+  const isGif = buffer.subarray(0, 3).toString('latin1') === 'GIF'
+  const isWebp = buffer.subarray(0, 4).toString('latin1') === 'RIFF' && buffer.subarray(8, 12).toString('latin1') === 'WEBP'
+  const isMp4 = buffer.subarray(0, 4).toString('latin1') === 'ftyp'
+  const isTxt = extension === '.txt' || buffer.toString('latin1').includes('learnspace')
+  const isJson = extension === '.json'
+  const isHtml = extension === '.html' || buffer.subarray(0, 15).toString('latin1') === '<!DOCTYPE html'
+  const isCsv = extension === '.csv'
+  const isMarkdown = extension === '.md' || buffer.subarray(0, 2).toString('utf8') === '# '
+  const isAudio = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'opus'].includes(extension.replace('.', '').toLowerCase())
+  const isVideo = ['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v', 'ogv', '3gp'].includes(extension.replace('.', '').toLowerCase())
+  const isOffice = ['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx'].includes(extension.replace('.', '').toLowerCase())
+  const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'heic', 'heif', 'tiff'].includes(extension.replace('.', '').toLowerCase())
+  const isZip = ['zip'].includes(extension.replace('.', '').toLowerCase())
+  const mime = isPdf ? 'application/pdf' : isImage ? 'image/png' : isJpg ? 'image/jpeg' : isGif ? 'image/gif' : isWebp ? 'image/webp' : isSvg ? 'image/svg+xml' : isAudio ? 'audio/mpeg' : isVideo ? 'video/mp4' : isOffice ? 'application/vnd.openxmlformats-officedocument.' + (extension.toLowerCase().includes('spreadsheet') ? 'spreadsheetml.sheet' : extension.toLowerCase().includes('presentation') ? 'presentationml.presentation' : extension.toLowerCase().includes('word') ? 'wordprocessingml.document' : 'spreadsheetml.sheet') : isText ? 'text/plain' : isJson ? 'application/json' : isHtml ? 'text/html' : isCsv ? 'text/csv' : isMarkdown ? 'text/markdown' : isZip ? 'application/zip' : isAudio ? 'audio/mpeg' : isVideo ? 'video/mp4' : isOffice ? 'application/vnd.openxmlformats-officedocument.' + (extension.toLowerCase().includes('spreadsheet') ? 'spreadsheetml.sheet' : extension.toLowerCase().includes('presentation') ? 'presentationml.presentation' : extension.toLowerCase().includes('word') ? 'wordprocessingml.document' : 'spreadsheetml.sheet') : 'application/octet-stream'
+  return mime
+}
+const getFaculty = async (req, res, next) => {
+  try {
+    const database = await getDatabase()
+    const faculty = await database.collection('users').findOne({ id: req.userId })
+    req.faculty = faculty || null
+    req.facultyId = faculty ? faculty.id : null
     return next()
   } catch (error) {
-    console.error('Slide ownership check error:', error)
-    return res.status(500).json({ message: 'Could not verify lesson access.' })
+    console.error('Load faculty error:', error)
+    return res.status(500).json({ message: 'Could not load the faculty.' })
   }
 }
-
-const presentationForSlide = (slide) => {
-  const content = safeJsonArray(slide.content_json)
-  const presentation = content[0]?.presentation
-  return presentation && typeof presentation === 'object'
-    ? presentation
-    : null
-}
-
-const removePresentationFile = (presentation) => {
-  if (
-    !presentation?.fileId ||
-    !/^[0-9a-f-]{36}(?:\.[a-z0-9]{1,16})?$/i.test(presentation.fileId)
-  ) {
-    return
-  }
-  const filePath = path.join(presentationDirectory, presentation.fileId)
+const recordActivity = async ({ action, entityType, entityId, message, faculty, classId }) => {
   try {
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
-  } catch (error) {
-    console.error('Remove lesson presentation file error:', error)
-  }
-}
-
-const previewMimeForFile = (extension, buffer) => {
-  if (extension === '.svg') {
-    return 'image/svg+xml'
-  }
-  if (extension === '.bmp' && buffer.subarray(0, 2).toString() === 'BM') {
-    return 'image/bmp'
-  }
-  if (
-    extension === '.avif' &&
-    buffer.subarray(4, 8).toString() === 'ftyp' &&
-    buffer.subarray(8, 12).toString().includes('avif')
-  ) {
-    return 'image/avif'
-  }
-  if (
-    ['.tif', '.tiff'].includes(extension) &&
-    ['49492A00', '4D4D002A'].includes(buffer.subarray(0, 4).toString('hex').toUpperCase())
-  ) {
-    return 'image/tiff'
-  }
-  if (
-    [
-      '.txt',
-      '.csv',
-      '.tsv',
-      '.md',
-      '.log',
-      '.json',
-      '.xml',
-      '.html',
-      '.htm',
-      '.css',
-      '.js',
-      '.ts',
-      '.jsx',
-      '.tsx',
-      '.yml',
-      '.yaml',
-      '.ini',
-      '.sql',
-      '.py',
-      '.java',
-      '.c',
-      '.cpp',
-      '.h',
-      '.sh',
-      '.bat',
-      '.ps1',
-      '.rtf',
-    ].includes(extension)
-  ) {
-    return 'text/plain; charset=utf-8'
-  }
-  if (
-    extension === '.pdf' &&
-    buffer.subarray(0, 5).toString() === '%PDF-'
-  ) {
-    return 'application/pdf'
-  }
-  if (
-    extension === '.png' &&
-    buffer.subarray(0, 8).equals(Buffer.from('89504E470D0A1A0A', 'hex'))
-  ) {
-    return 'image/png'
-  }
-  if (
-    ['.jpg', '.jpeg'].includes(extension) &&
-    buffer.subarray(0, 3).equals(Buffer.from('FFD8FF', 'hex'))
-  ) {
-    return 'image/jpeg'
-  }
-  if (
-    extension === '.gif' &&
-    ['GIF87a', 'GIF89a'].includes(buffer.subarray(0, 6).toString())
-  ) {
-    return 'image/gif'
-  }
-  if (
-    extension === '.webp' &&
-    buffer.subarray(0, 4).toString() === 'RIFF' &&
-    buffer.subarray(8, 12).toString() === 'WEBP'
-  ) {
-    return 'image/webp'
-  }
-  const zipOfficeExtensions = [
-    '.docx',
-    '.docm',
-    '.dotx',
-    '.dotm',
-    '.xlsx',
-    '.xlsm',
-    '.xlsb',
-    '.xltx',
-    '.xltm',
-    '.ods',
-    '.pptx',
-    '.pptm',
-    '.ppsx',
-    '.potx',
-    '.potm',
-  ]
-  if (
-    zipOfficeExtensions.includes(extension) &&
-    buffer.subarray(0, 2).toString() === 'PK'
-  ) {
-    const officeMimeTypes = {
-      '.docx':
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      '.docm': 'application/vnd.ms-word.document.macroEnabled.12',
-      '.dotx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.template',
-      '.dotm': 'application/vnd.ms-word.template.macroEnabled.12',
-      '.xlsx':
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      '.xlsm':
-        'application/vnd.ms-excel.sheet.macroEnabled.12',
-      '.xlsb': 'application/vnd.ms-excel.sheet.binary.macroEnabled.12',
-      '.xltx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.template',
-      '.xltm': 'application/vnd.ms-excel.template.macroEnabled.12',
-      '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
-      '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      '.pptm': 'application/vnd.ms-powerpoint.presentation.macroEnabled.12',
-      '.ppsx': 'application/vnd.openxmlformats-officedocument.presentationml.slideshow',
-      '.potx': 'application/vnd.openxmlformats-officedocument.presentationml.template',
-      '.potm': 'application/vnd.ms-powerpoint.template.macroEnabled.12',
-    }
-    return officeMimeTypes[extension]
-  }
-  if (['.mp3', '.wav', '.ogg', '.m4a', '.aac'].includes(extension)) {
-    const audioMimeTypes = {
-      '.mp3': 'audio/mpeg',
-      '.wav': 'audio/wav',
-      '.ogg': 'audio/ogg',
-      '.m4a': 'audio/mp4',
-      '.aac': 'audio/aac',
-    }
-    return audioMimeTypes[extension]
-  }
-  if (['.mp4', '.webm', '.ogv', '.mov'].includes(extension)) {
-    const videoMimeTypes = {
-      '.mp4': 'video/mp4',
-      '.webm': 'video/webm',
-      '.ogv': 'video/ogg',
-      '.mov': 'video/quicktime',
-    }
-    return videoMimeTypes[extension]
-  }
-  return null
-}
-
-router.get('/bootstrap', requireAuth, requireRole('Faculty', 'Student'), (req, res) => {
-  try {
-    const scope = scopeForRole(req.userRole)
-    const classSelect =
-      req.userRole === 'Faculty' ? CLASS_SELECT : STUDENT_CLASS_SELECT
-    const classes = db
-      .prepare(`${classSelect} WHERE ${scope} ORDER BY c.created_date ASC`)
-      .all(req.userId)
-    const contentScope =
-      req.userRole === 'Faculty'
-        ? 'c.faculty_id = ?'
-        : `c.status = 'Published' AND q.status = 'Published' AND EXISTS (
-            SELECT 1 FROM enrollments e
-            WHERE e.class_id = c.id AND e.student_id = ? AND e.status = 'Active'
-          )`
-    const quizzes = db
-      .prepare(`
-        ${QUIZ_SELECT}
-        WHERE ${contentScope}
-        ORDER BY q.created_date DESC
-      `)
-      .all(req.userId)
-    const slideScope =
-      req.userRole === 'Faculty'
-        ? 'c.faculty_id = ?'
-        : `c.status = 'Published' AND s.status = 'Published' AND EXISTS (
-            SELECT 1 FROM enrollments e
-            WHERE e.class_id = c.id AND e.student_id = ? AND e.status = 'Active'
-          )`
-    const slides = db
-      .prepare(`${SLIDE_SELECT} WHERE ${slideScope} ORDER BY s.created_date ASC`)
-      .all(req.userId)
-    const activity = db
-      .prepare(`
-        SELECT a.* FROM activity_logs a
-        JOIN classes c ON c.id = a.class_id
-        WHERE ${scopeForRole(req.userRole)}
-        ORDER BY a.created_at DESC LIMIT 20
-      `)
-      .all(req.userId)
-
-    return res.json({
-      classes: classes.map(mapClass),
-      quizzes: quizzes.map((quiz) =>
-        mapQuiz(quiz, { includeAnswers: req.userRole === 'Faculty' }),
-      ),
-      slides: slides.map(mapSlide),
-      activity: activity.map(mapActivity),
-      syncedAt: new Date().toISOString(),
+    const database = await getDatabase()
+    await database.collection('activity').insertOne({
+      _id: crypto.randomUUID(),
+      id: crypto.randomUUID(),
+      action,
+      entity_type: entityType,
+      entity_id: entityId,
+      message,
+      faculty_id: faculty ? faculty.id : null,
+      faculty_name: faculty ? faculty.full_name : '',
+      class_id: classId || null,
+      created_date: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     })
   } catch (error) {
-    console.error('Learning bootstrap error:', error)
-    return res.status(500).json({ message: 'Could not load learning data.' })
+    console.error('Record activity error:', error)
   }
+}
+const classFields = (body = {}, current = {}) => ({
+  className: typeof body.class_name === 'string' ? body.class_name.trim() : current.class_name,
+  subject: typeof body.subject === 'string' ? body.subject.trim() : current.subject,
+  subjectCode: typeof body.subject_code === 'string' ? body.subject_code.trim().toUpperCase() : current.subject_code,
+  term: typeof body.term === 'string' ? body.term.trim() : current.term,
+  academicYear: typeof body.academic_year === 'string' ? body.academic_year.trim() : current.academic_year,
+  description: typeof body.description === 'string' ? body.description : current.description,
+  status: body.status === 'Draft' || body.status === 'Published' ? body.status : current.status,
+  accent: typeof body.accent === 'string' ? body.accent : current.accent,
+})
+const mapClass = (row) => ({
+  id: row.id,
+  class_name: row.class_name,
+  subject: row.subject,
+  subject_code: row.subject_code,
+  term: row.term,
+  academic_year: row.academic_year,
+  description: row.description,
+  class_code: row.class_code,
+  join_code: row.join_code,
+  status: row.status,
+  accent: row.accent,
+  faculty_id: row.faculty_id,
+  created_date: row.created_date,
+  updated_at: row.updated_at,
+})
+const createClassCode = (subjectCode) => {
+  const digits = String(subjectCode || '').replace(/[^0-9]/g, '')
+  const prefix = String(subjectCode || '').slice(0, 2).toUpperCase()
+  const body = digits.padStart(4, '0').slice(0, 4)
+  return `${prefix}-${body}`
+}
+const createJoinCode = () => {
+  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+  let code = ''
+  for (let i = 0; i < 6; i += 1) code += alphabet[Math.floor(Math.random() * alphabet.length)]
+  return code
+}
+const createClassCodeSafe = (subjectCode) => createClassCode(subjectCode)
+const ownerClass = async (req, res, next) => {
+  try {
+    const database = await getDatabase()
+    const classRecord = await database.collection('classes').findOne({ id: req.params.id })
+    if (!classRecord || classRecord.faculty_id !== req.userId) {
+      return res.status(404).json({ message: 'Class not found.' })
+    }
+    req.classRecord = classRecord
+    return next()
+  } catch (error) {
+    console.error('Load class error:', error)
+    return res.status(500).json({ message: 'Could not load the class.' })
+  }
+}
+const mapClasswork = (row) => ({
+  ...row,
+  class_name: row.class_name,
+  subject_code: row.subject_code,
+  faculty_id: row.faculty_id,
+})
+const mapQuiz = (row, context = {}) => ({
+  ...row,
+  class_name: context.class_name,
+  subject_code: context.subject_code,
+  faculty_id: context.faculty_id,
+})
+const mapSlide = (row, context = {}) => ({
+  ...row,
+  class_name: context.class_name,
+  subject_code: context.subject_code,
+  faculty_id: context.faculty_id,
+})
+const mapActivity = (row) => ({
+  id: row.id,
+  action: row.action,
+  entity_type: row.entity_type,
+  entity_id: row.entity_id,
+  message: row.message,
+  faculty_id: row.faculty_id,
+  faculty_name: row.faculty_name,
+  class_id: row.class_id,
+  created_date: row.created_date,
+  updated_at: row.updated_at,
+})
+const mapSubmission = (row, context = {}) => ({
+  ...row,
+  studentName: context.studentName,
+  studentUsername: context.studentUsername,
+  className: context.className,
+})
+const mapQuizAttempt = (row, context = {}) => ({
+  ...row,
+  class_name: context.class_name,
+  subject_code: context.subject_code,
+  faculty_id: context.faculty_id,
+})
+const mapSlidePresentation = (row, context = {}) => ({
+  ...row,
+  class_name: context.class_name,
+  subject_code: context.subject_code,
+  faculty_id: context.faculty_id,
 })
 
-router.get('/classes', requireAuth, requireRole('Faculty', 'Student'), (req, res) => {
-  try {
-    const classSelect =
-      req.userRole === 'Faculty' ? CLASS_SELECT : STUDENT_CLASS_SELECT
-    const classes = db
-      .prepare(
-        `${classSelect} WHERE ${scopeForRole(req.userRole)} ORDER BY c.created_date ASC`,
-      )
-      .all(req.userId)
-    return res.json({ classes: classes.map(mapClass) })
-  } catch (error) {
-    console.error('Load classes error:', error)
-    return res.status(500).json({ message: 'Could not load classes.' })
-  }
-})
+const router = express.Router()
+
+router.get(
+  '/bootstrap',
+  requireAuth,
+  requireRole('Faculty', 'Student'),
+  async (req, res) => {
+    try {
+      const database = await getDatabase()
+      const user = await database.collection('users').findOne({ id: req.userId })
+      const classes = await database.collection('classes').find({ faculty_id: req.userId }).toArray()
+      const enrollments = await database
+        .collection('enrollments')
+        .find({ student_id: req.userId, status: 'Active' })
+        .toArray()
+      const learningClasses = []
+      const seen = new Set()
+      for (const classRecord of classes) {
+        const key = classRecord.id
+        if (seen.has(key)) continue
+        seen.add(key)
+        learningClasses.push(classRecord)
+      }
+      for (const enrollment of enrollments) {
+        const classRecord = await database.collection('classes').findOne({ id: enrollment.class_id })
+        if (!classRecord) continue
+        const key = classRecord.id
+        if (seen.has(key)) continue
+        seen.add(key)
+        learningClasses.push(classRecord)
+      }
+      const classIds = new Set(learningClasses.map((item) => item.id))
+      const faculty = await database.collection('users').find({ id: { $in: learningClasses.map((item) => item.faculty_id) } }).toArray()
+      const facultyNames = new Map(faculty.map((item) => [item.id, item.full_name]))
+      const classRows = []
+      for (const classRecord of learningClasses) {
+        const classwork = await database
+          .collection('classwork')
+          .find({ class_id: classRecord.id, status: 'Published' })
+          .toArray()
+        classRows.push({
+          id: classRecord.id,
+          class_name: classRecord.class_name,
+          subject: classRecord.subject,
+          subject_code: classRecord.subject_code,
+          term: classRecord.term,
+          academic_year: classRecord.academic_year,
+          description: classRecord.description,
+          class_code: classRecord.class_code,
+          join_code: classRecord.join_code,
+          status: classRecord.status,
+          accent: classRecord.accent,
+          faculty_id: classRecord.faculty_id,
+          faculty_name: facultyNames.get(classRecord.faculty_id) || '',
+          created_date: classRecord.created_date,
+          updated_at: classRecord.updated_at,
+          classwork_count: classwork.length,
+          student_count: await database.collection('enrollments').countDocuments({ class_id: classRecord.id, status: 'Active' }),
+        })
+      }
+      return res.json({ classes: classRows })
+    } catch (error) {
+      console.error('Bootstrap error:', error)
+      return res.status(500).json({ message: 'Could not load the dashboard.' })
+    }
+  },
+)
+
+router.get(
+  '/classes',
+  requireAuth,
+  requireRole('Faculty', 'Student'),
+  requireClassAccess('id'),
+  async (req, res) => {
+    try {
+      const database = await getDatabase()
+      const user = await database.collection('users').findOne({ id: req.userId })
+      const classes = await database
+        .collection('classes')
+        .find({ $or: [{ faculty_id: req.userId }, { id: { $in: (await database.collection('enrollments').find({ student_id: req.userId, status: 'Active' }).toArray()).map((e) => e.class_id) } }] })
+        .toArray()
+      const rows = []
+      for (const classRecord of classes) {
+        const classwork = await database
+          .collection('classwork')
+          .find({ class_id: classRecord.id, status: 'Published' })
+          .toArray()
+        rows.push({
+          id: classRecord.id,
+          class_name: classRecord.class_name,
+          subject: classRecord.subject,
+          subject_code: classRecord.subject_code,
+          term: classRecord.term,
+          academic_year: classRecord.academic_year,
+          description: classRecord.description,
+          class_code: classRecord.class_code,
+          join_code: classRecord.join_code,
+          status: classRecord.status,
+          accent: classRecord.accent,
+          faculty_id: classRecord.faculty_id,
+          faculty_name: user && user.full_name ? user.full_name : '',
+          created_date: classRecord.created_date,
+          updated_at: classRecord.updated_at,
+          classwork_count: classwork.length,
+          student_count: await database.collection('enrollments').countDocuments({ class_id: classRecord.id, status: 'Active' }),
+        })
+      }
+      return res.json({ classes: rows })
+    } catch (error) {
+      console.error('Load classes error:', error)
+      return res.status(500).json({ message: 'Could not load classes.' })
+    }
+  },
+)
 
 router.get(
   '/classes/:id',
   requireAuth,
   requireRole('Faculty', 'Student'),
   requireClassAccess('id'),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const classSelect =
-        req.userRole === 'Faculty' ? CLASS_SELECT : STUDENT_CLASS_SELECT
-      const row = db
-        .prepare(`
-          ${classSelect}
-          WHERE c.id = ? AND ${scopeForRole(req.userRole)}
-        `)
-        .get(req.params.id, req.userId)
-      if (!row) return res.status(404).json({ message: 'Class not found.' })
-      return res.json({ class: mapClass(row) })
+      const database = await getDatabase()
+      const classRecord = await database.collection('classes').findOne({ id: req.classId })
+      const classwork = await database
+        .collection('classwork')
+        .find({ class_id: req.classId, status: 'Published' })
+        .toArray()
+      const announcements = await database
+        .collection('announcements')
+        .find({ class_id: req.classId })
+        .toArray()
+      const slides = await database
+        .collection('slides')
+        .find({ class_id: req.classId, status: 'Published' })
+        .toArray()
+      const quizzes = await database
+        .collection('quizzes')
+        .find({ class_id: req.classId, status: 'Published' })
+        .toArray()
+      const context = {
+        class_name: classRecord ? classRecord.class_name : '',
+        subject_code: classRecord ? classRecord.subject_code : '',
+        faculty_id: classRecord ? classRecord.faculty_id : null,
+      }
+      const rows = classwork.map((work) => ({
+        ...work,
+        class_name: context.class_name,
+        subject_code: context.subject_code,
+        faculty_id: context.faculty_id,
+        student_status: null,
+        submission_id: null,
+        grade: null,
+        submitted_at: null,
+        submission_text: '',
+        file_id: null,
+        file_name: null,
+        file_size: null,
+        submitted_count: 0,
+        student_count: 0,
+      }))
+      return res.json({ class: { ...classRecord, classwork: rows }, announcements, slides, quizzes })
     } catch (error) {
       console.error('Load class error:', error)
       return res.status(500).json({ message: 'Could not load the class.' })
@@ -605,60 +422,20 @@ router.get(
   requireAuth,
   requireRole('Faculty', 'Student'),
   requireClassAccess('id'),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const announcements = db.prepare(`
-        SELECT a.id, a.message, a.created_at AS createdAt,
-          u.full_name AS authorName
-        FROM class_announcements a
-        JOIN classes c ON c.id = a.class_id
-        JOIN users u ON u.id = a.author_id
-        WHERE c.id = ?
-          AND (
-            (c.faculty_id = ? AND ? = 'Faculty')
-            OR (
-              c.status = 'Published'
-              AND ? = 'Student'
-              AND EXISTS (
-                SELECT 1 FROM enrollments e
-                WHERE e.class_id = c.id AND e.student_id = ?
-                  AND e.status = 'Active'
-              )
-            )
-          )
-        ORDER BY a.created_at DESC
-      `).all(req.classId, req.userId, req.userRole, req.userRole, req.userId)
-      const comments = announcements.length
-        ? db.prepare(`
-            SELECT cm.id, cm.announcement_id AS announcementId,
-              cm.message, cm.created_at AS createdAt,
-              u.full_name AS authorName
-            FROM class_announcement_comments cm
-            JOIN class_announcements a ON a.id = cm.announcement_id
-            JOIN users u ON u.id = cm.author_id
-            WHERE a.class_id = ?
-            ORDER BY cm.created_at
-          `).all(req.classId)
-        : []
-      const commentsByAnnouncement = new Map()
-      comments.forEach((comment) => {
-        const { announcementId, ...visibleComment } = comment
-        if (!commentsByAnnouncement.has(announcementId)) {
-          commentsByAnnouncement.set(announcementId, [])
-        }
-        commentsByAnnouncement.get(announcementId).push(visibleComment)
-      })
-      return res.json({
-        announcements: announcements.map((announcement) =>
-          mapAnnouncement(
-            announcement,
-            commentsByAnnouncement.get(announcement.id) || [],
-          ),
-        ),
-      })
+      const database = await getDatabase()
+      const announcements = await database
+        .collection('announcements')
+        .find({ class_id: req.classId })
+        .toArray()
+      const rows = announcements
+        .sort((a, b) => String(b.created_at || b.created_date || '').localeCompare(String(a.created_at || a.created_date || '')))
+        .map(mapAnnouncement)
+      return res.json({ announcements: rows })
     } catch (error) {
-      console.error('Load class announcements error:', error)
-      return res.status(500).json({ message: 'Could not load class announcements.' })
+      console.error('Load announcements error:', error)
+      return res.status(500).json({ message: 'Could not load announcements.' })
     }
   },
 )
@@ -668,31 +445,38 @@ router.post(
   requireAuth,
   requireRole('Faculty'),
   requireClassOwner('id'),
-  (req, res) => {
-    const message =
-      typeof req.body?.message === 'string' ? req.body.message.trim() : ''
-    if (!message || message.length > 5000) {
-      return res.status(400).json({
-        message: 'Enter an announcement of 1 to 5,000 characters.',
-      })
+  async (req, res) => {
+    const body = req.body || {}
+    const title = typeof body.title === 'string' ? body.title.trim() : ''
+    const bodyText = typeof body.body === 'string' ? body.body.trim() : ''
+    if (!title || title.length < 2 || title.length > 200) {
+      return res.status(400).json({ message: 'Announcement title must be 2 to 200 characters.' })
     }
-
+    if (!bodyText) {
+      return res.status(400).json({ message: 'Announcement body is required.' })
+    }
     try {
+      const database = await getDatabase()
       const id = crypto.randomUUID()
-      db.prepare(`
-        INSERT INTO class_announcements (id, class_id, author_id, message)
-        VALUES (?, ?, ?, ?)
-      `).run(id, req.classId, req.userId, message)
-      const announcement = db.prepare(`
-        SELECT a.id, a.message, a.created_at AS createdAt,
-          u.full_name AS authorName
-        FROM class_announcements a
-        JOIN users u ON u.id = a.author_id
-        WHERE a.id = ? AND a.class_id = ?
-      `).get(id, req.classId)
-      return res.status(201).json({ announcement: mapAnnouncement(announcement) })
+      const announcement = {
+        _id: id,
+        id,
+        class_id: req.classId,
+        teacher_id: req.userId,
+        teacher_name: req.faculty ? req.faculty.full_name : '',
+        title,
+        body: bodyText,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        author_id: req.userId,
+        author_name: req.faculty ? req.faculty.full_name : '',
+        comment_json: JSON.stringify([]),
+      }
+      await database.collection('announcements').insertOne(announcement)
+      const created = await database.collection('announcements').findOne({ id })
+      return res.status(201).json({ announcement: mapAnnouncement(created) })
     } catch (error) {
-      console.error('Create class announcement error:', error)
+      console.error('Create announcement error:', error)
       return res.status(500).json({ message: 'Could not create the announcement.' })
     }
   },
@@ -703,18 +487,18 @@ router.delete(
   requireAuth,
   requireRole('Faculty'),
   requireClassOwner('id'),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const result = db.prepare(`
-        DELETE FROM class_announcements
-        WHERE id = ? AND class_id = ? AND author_id = ?
-      `).run(req.params.announcementId, req.classId, req.userId)
-      if (!result.changes) {
+      const database = await getDatabase()
+      const deleted = await database
+        .collection('announcements')
+        .deleteOne({ id: req.params.announcementId, class_id: req.classId })
+      if (deleted.deletedCount === 0) {
         return res.status(404).json({ message: 'Announcement not found.' })
       }
       return res.json({ message: 'Announcement deleted.' })
     } catch (error) {
-      console.error('Delete class announcement error:', error)
+      console.error('Delete announcement error:', error)
       return res.status(500).json({ message: 'Could not delete the announcement.' })
     }
   },
@@ -723,44 +507,38 @@ router.delete(
 router.post(
   '/classes/:id/announcements/:announcementId/comments',
   requireAuth,
-  requireRole('Student'),
+  requireRole('Faculty', 'Student'),
   requireClassAccess('id'),
-  (req, res) => {
-    const message =
-      typeof req.body?.message === 'string' ? req.body.message.trim() : ''
-    if (!message || message.length > 2000) {
-      return res.status(400).json({
-        message: 'Enter a comment of 1 to 2,000 characters.',
-      })
+  async (req, res) => {
+    const body = req.body || {}
+    const text = typeof body.text === 'string' ? body.text.trim() : ''
+    if (!text) {
+      return res.status(400).json({ message: 'Comment text is required.' })
     }
     try {
-      const announcement = db.prepare(`
-        SELECT a.id FROM class_announcements a
-        JOIN classes c ON c.id = a.class_id
-        JOIN enrollments e ON e.class_id = c.id
-        WHERE a.id = ? AND c.id = ? AND c.status = 'Published'
-          AND e.student_id = ? AND e.status = 'Active'
-      `).get(req.params.announcementId, req.classId, req.userId)
+      const database = await getDatabase()
+      const announcement = await database.collection('announcements').findOne({ id: req.params.announcementId })
       if (!announcement) {
         return res.status(404).json({ message: 'Announcement not found.' })
       }
-      const id = crypto.randomUUID()
-      db.prepare(`
-        INSERT INTO class_announcement_comments
-          (id, announcement_id, author_id, message)
-        VALUES (?, ?, ?, ?)
-      `).run(id, announcement.id, req.userId, message)
-      const comment = db.prepare(`
-        SELECT cm.id, cm.message, cm.created_at AS createdAt,
-          u.full_name AS authorName
-        FROM class_announcement_comments cm
-        JOIN users u ON u.id = cm.author_id
-        WHERE cm.id = ?
-      `).get(id)
-      return res.status(201).json({ comment })
+      const comments = safeJsonArray(announcement.comment_json)
+      const comment = {
+        id: crypto.randomUUID(),
+        author_id: req.userId,
+        author_name: req.userId,
+        text,
+        created_at: new Date().toISOString(),
+      }
+      const nextComments = [...comments, comment]
+      await database.collection('announcements').updateOne(
+        { _id: announcement._id },
+        { $set: { comment_json: JSON.stringify(nextComments) } },
+      )
+      const updated = await database.collection('announcements').findOne({ id: req.params.announcementId })
+      return res.status(201).json({ announcement: mapAnnouncement(updated) })
     } catch (error) {
-      console.error('Create announcement comment error:', error)
-      return res.status(500).json({ message: 'Could not post the comment.' })
+      console.error('Add comment error:', error)
+      return res.status(500).json({ message: 'Could not add the comment.' })
     }
   },
 )
@@ -770,43 +548,70 @@ router.get(
   requireAuth,
   requireRole('Faculty', 'Student'),
   requireClassAccess('id'),
-  (req, res) => {
+  async (req, res) => {
     try {
+      const database = await getDatabase()
       const student = req.userRole === 'Student'
-      const rows = db.prepare(`
-        SELECT w.*, c.class_name, c.subject_code, c.faculty_id,
-          ${student
-            ? `CASE
-                WHEN sub.status IS NULL AND w.due_at IS NOT NULL
-                  AND datetime(w.due_at) < datetime('now') THEN 'missing'
-                ELSE COALESCE(sub.status, 'assigned')
-              END AS student_status,
-              sub.id AS submission_id, sub.grade, sub.submitted_at,
-              sub.submission_text, sub.file_id, sub.file_name, sub.file_size,`
-            : `NULL AS student_status, NULL AS submission_id, NULL AS grade,
-              NULL AS submitted_at, NULL AS submission_text, NULL AS file_id,
-              NULL AS file_name, NULL AS file_size,`}
-          (SELECT COUNT(*) FROM submissions s
-            WHERE s.classwork_id = w.id
-              AND s.status IN ('turned_in','graded','returned')
-          ) AS submitted_count,
-          (SELECT COUNT(*) FROM enrollments e
-            WHERE e.class_id = c.id AND e.status = 'Active'
-          ) AS student_count
-        FROM classwork w
-        JOIN classes c ON c.id = w.class_id
-        ${student
-          ? `LEFT JOIN submissions sub
-              ON sub.classwork_id = w.id AND sub.student_id = ?`
-          : 'LEFT JOIN submissions sub ON 1 = 0'}
-        WHERE c.id = ?
-          ${student ? "AND c.status = 'Published' AND w.status = 'Published'" : ''}
-        ORDER BY w.due_at IS NULL, w.due_at, w.created_at DESC
-      `)
-      const rowsForClass = student
-        ? rows.all(req.userId, req.classId)
-        : rows.all(req.classId)
-      return res.json({ classwork: rowsForClass.map(mapClasswork) })
+      const classworkDocs = await database
+        .collection('classwork')
+        .find({ class_id: req.classId, status: 'Published' })
+        .toArray()
+      const rows = []
+      for (const work of classworkDocs) {
+        const submission = student
+          ? await database
+              .collection('submissions')
+              .findOne({ classwork_id: work.id, student_id: req.userId })
+          : null
+        const submittedCount = await database
+          .collection('submissions')
+          .countDocuments({
+            classwork_id: work.id,
+            status: { $in: ['turned_in', 'graded', 'returned'] },
+          })
+        const studentCount = await database
+          .collection('enrollments')
+          .countDocuments({ class_id: work.class_id, status: 'Active' })
+        let studentStatus = null
+        if (student) {
+          const missing =
+            !submission &&
+            work.due_at !== null &&
+            work.due_at !== undefined &&
+            new Date(work.due_at).getTime() < Date.now()
+          studentStatus = missing
+            ? 'missing'
+            : submission && submission.status
+              ? submission.status
+              : 'assigned'
+        }
+        const classRecord = await database
+          .collection('classes')
+          .findOne({ id: work.class_id })
+        rows.push({
+          ...work,
+          class_name: classRecord && classRecord.class_name,
+          subject_code: classRecord && classRecord.subject_code,
+          faculty_id: classRecord && classRecord.faculty_id,
+          student_status: studentStatus,
+          submission_id: submission ? submission.id : null,
+          grade: submission ? submission.grade ?? null : null,
+          submitted_at: submission ? submission.submitted_at ?? null : null,
+          submission_text: submission ? submission.submission_text || '' : '',
+          file_id: submission ? submission.file_id ?? null : null,
+          file_name: submission ? submission.file_name ?? null : null,
+          file_size: submission ? submission.file_size ?? null : null,
+          submitted_count: submittedCount,
+          student_count: studentCount,
+        })
+      }
+      rows.sort(
+        (a, b) =>
+          (a.due_at ? 0 : 1) - (b.due_at ? 0 : 1) ||
+          String(a.due_at || '').localeCompare(String(b.due_at || '')) ||
+          String(b.created_at || '').localeCompare(String(a.created_at || '')),
+      )
+      return res.json({ classwork: rows.map(mapClasswork) })
     } catch (error) {
       console.error('Load classwork error:', error)
       return res.status(500).json({ message: 'Could not load classwork.' })
@@ -819,31 +624,35 @@ router.get(
   requireAuth,
   requireRole('Faculty', 'Student'),
   requireClassAccess('id'),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const learningClass = db.prepare(`
-        SELECT c.id, c.faculty_id, c.status, u.full_name AS teacher_name
-        FROM classes c
-        JOIN users u ON u.id = c.faculty_id
-        WHERE c.id = ?
-          AND (? = 'Faculty' OR c.status = 'Published')
-      `).get(req.classId, req.userRole)
+      const database = await getDatabase()
+      const learningClass = await database.collection('classes').findOne({
+        id: req.classId,
+      })
       if (!learningClass) {
         return res.status(404).json({ message: 'Class not found.' })
       }
-      const usernameColumn =
-        req.userRole === 'Faculty' ? 'u.username' : 'NULL AS username'
-      const students = db.prepare(`
-        SELECT u.id, u.full_name AS name, ${usernameColumn}
-        FROM enrollments e
-        JOIN users u ON u.id = e.student_id AND u.role = 'Student'
-        WHERE e.class_id = ? AND e.status = 'Active'
-          AND (? = 'Faculty' OR u.id != ?)
-        ORDER BY u.full_name
-      `).all(req.classId, req.userRole, req.userId)
+      const students = await database
+        .collection('enrollments')
+        .find({ class_id: req.classId, status: 'Active' })
+        .toArray()
+      const studentRows = []
+      for (const enrollment of students) {
+        const student = await database
+          .collection('users')
+          .findOne({ id: enrollment.student_id })
+        if (!student || student.role !== 'Student') continue
+        studentRows.push({
+          id: student.id,
+          name: student.full_name,
+          username: req.userRole === 'Faculty' ? student.username : undefined,
+        })
+      }
+      studentRows.sort((a, b) => a.name.localeCompare(b.name))
       return res.json({
-        teacher: { id: learningClass.faculty_id, name: learningClass.teacher_name },
-        students,
+        teacher: { id: learningClass.faculty_id, name: learningClass.faculty_id },
+        students: studentRows,
       })
     } catch (error) {
       console.error('Load class people error:', error)
@@ -857,7 +666,7 @@ router.post(
   requireAuth,
   requireRole('Faculty'),
   requireClassOwner('id'),
-  (req, res) => {
+  async (req, res) => {
     const body = req.body || {}
     const type = body.type
     const title = typeof body.title === 'string' ? body.title.trim() : ''
@@ -869,14 +678,10 @@ router.post(
       return res.status(400).json({ message: 'Choose a valid classwork type.' })
     }
     if (!title || title.length > 200) {
-      return res.status(400).json({
-        message: 'Enter a title of 1 to 200 characters.',
-      })
+      return res.status(400).json({ message: 'Enter a title of 1 to 200 characters.' })
     }
     if (instructions.length > 10000) {
-      return res.status(400).json({
-        message: 'Instructions must be 10,000 characters or fewer.',
-      })
+      return res.status(400).json({ message: 'Instructions must be 10,000 characters or fewer.' })
     }
     let normalizedDueAt = null
     if (dueAt) {
@@ -889,41 +694,27 @@ router.post(
       }
       normalizedDueAt = dueDate.toISOString()
     }
-
-    let quizId = null
-    if (type === 'quiz') {
-      quizId = typeof body.quizId === 'string' ? body.quizId : ''
-      const quiz = quizId && db.prepare(`
-        SELECT id FROM quizzes
-        WHERE id = ? AND class_id = ?
-      `).get(quizId, req.classId)
-      if (!quiz) {
-        return res.status(400).json({
-          message: 'Choose a quiz created for this class.',
-        })
-      }
-    }
-
     try {
+      const database = await getDatabase()
       const id = crypto.randomUUID()
-      db.prepare(`
-        INSERT INTO classwork
-          (id, class_id, type, title, instructions, due_at, status, quiz_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+      const classRecord = await database
+        .collection('classes')
+        .findOne({ id: req.classId })
+      await database.collection('classwork').insertOne({
+        _id: id,
         id,
-        req.classId,
+        class_id: req.classId,
         type,
         title,
         instructions,
-        normalizedDueAt,
+        due_at: normalizedDueAt,
         status,
-        quizId,
-      )
-      const row = db.prepare(`
-        ${CLASSWORK_SELECT}
-        WHERE w.id = ? AND c.faculty_id = ?
-      `).get(id, req.userId)
+        quiz_id: null,
+        attachment_json: JSON.stringify([]),
+        created_date: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      const row = await database.collection('classwork').findOne({ id })
       return res.status(201).json({ classwork: mapClasswork(row) })
     } catch (error) {
       console.error('Create classwork error:', error)
@@ -937,7 +728,7 @@ router.patch(
   requireAuth,
   requireRole('Faculty'),
   requireClassworkOwner('id'),
-  (req, res) => {
+  async (req, res) => {
     const body = req.body || {}
     const title =
       typeof body.title === 'string' ? body.title.trim() : req.classwork.title
@@ -965,19 +756,31 @@ router.patch(
       normalizedDueAt = dueDate.toISOString()
     }
     try {
-      db.prepare(`
-        UPDATE classwork
-        SET title = ?, instructions = ?, due_at = ?, status = ?,
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE id = ? AND class_id IN (
-          SELECT id FROM classes WHERE faculty_id = ?
-        )
-      `).run(title, instructions, normalizedDueAt, status, req.classwork.id, req.userId)
-      const row = db.prepare(`
-        ${CLASSWORK_SELECT}
-        WHERE w.id = ? AND c.faculty_id = ?
-      `).get(req.classwork.id, req.userId)
-      return res.json({ classwork: mapClasswork(row) })
+      const database = await getDatabase()
+      await database.collection('classwork').updateOne(
+        { id: req.classwork.id },
+        {
+          $set: {
+            title,
+            instructions,
+            due_at: normalizedDueAt,
+            status,
+            updated_at: new Date().toISOString(),
+          },
+        },
+      )
+      const row = await database.collection('classwork').findOne({ id: req.classwork.id })
+      const classRecord = await database
+        .collection('classes')
+        .findOne({ id: row.class_id })
+      return res.json({
+        classwork: {
+          ...row,
+          class_name: classRecord && classRecord.class_name,
+          subject_code: classRecord && classRecord.subject_code,
+          faculty_id: classRecord && classRecord.faculty_id,
+        },
+      })
     } catch (error) {
       console.error('Update classwork error:', error)
       return res.status(500).json({ message: 'Could not update classwork.' })
@@ -990,27 +793,24 @@ router.delete(
   requireAuth,
   requireRole('Faculty'),
   requireClassworkOwner('id'),
-  (req, res) => {
+  async (req, res) => {
     try {
+      const database = await getDatabase()
       const attachments = safeJsonArray(req.classwork.attachment_json)
-      const files = db.prepare(`
-        SELECT s.file_id FROM submissions s
-        WHERE s.classwork_id = ? AND s.file_id IS NOT NULL
-      `).all(req.classwork.id)
-      const removed = db.prepare(`
-        DELETE FROM classwork WHERE id = ? AND class_id IN (
-          SELECT id FROM classes WHERE faculty_id = ?
-        )
-      `).run(req.classwork.id, req.userId)
-      if (!removed.changes) {
+      const files = await database
+        .collection('submissions')
+        .find({ classwork_id: req.classwork.id, file_id: { $ne: null } })
+        .toArray()
+      const removed = await database.collection('classwork').deleteOne({ id: req.classwork.id })
+      if (removed.deletedCount === 0) {
         return res.status(404).json({ message: 'Classwork not found.' })
       }
-      attachments.forEach((item) =>
-        removeStoredFile(classworkDirectory, item?.fileId, 'classwork attachment'),
-      )
-      files.forEach((item) =>
-        removeStoredFile(submissionDirectory, item.file_id, 'submission'),
-      )
+      for (const item of attachments) {
+        removeStoredFile(classworkDirectory, item?.fileId, 'classwork attachment')
+      }
+      for (const file of files) {
+        removeStoredFile(submissionDirectory, file.file_id, 'submission')
+      }
       return res.json({ message: 'Classwork deleted.' })
     } catch (error) {
       console.error('Delete classwork error:', error)
@@ -1025,7 +825,7 @@ router.post(
   requireRole('Faculty'),
   requireClassworkOwner('id'),
   receiveUpload(classworkUpload, 'file'),
-  (req, res) => {
+  async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ message: 'Choose a file to attach.' })
     }
@@ -1040,6 +840,7 @@ router.post(
       size: req.file.size,
     }
     try {
+      const database = await getDatabase()
       fs.mkdirSync(classworkDirectory, { recursive: true })
       fs.writeFileSync(
         path.join(classworkDirectory, attachment.fileId),
@@ -1047,22 +848,10 @@ router.post(
         { flag: 'wx' },
       )
       const nextAttachments = [...attachments, attachment]
-      const update = db.prepare(`
-        UPDATE classwork
-        SET attachment_json = ?,
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE id = ? AND class_id IN (
-          SELECT id FROM classes WHERE faculty_id = ?
-        )
-      `).run(
-        JSON.stringify(nextAttachments),
-        req.classwork.id,
-        req.userId,
+      await database.collection('classwork').updateOne(
+        { id: req.classwork.id },
+        { $set: { attachment_json: JSON.stringify(nextAttachments) } },
       )
-      if (!update.changes) {
-        removeStoredFile(classworkDirectory, attachment.fileId, 'classwork attachment')
-        return res.status(404).json({ message: 'Classwork not found.' })
-      }
       return res.status(201).json({ attachment })
     } catch (error) {
       removeStoredFile(classworkDirectory, attachment.fileId, 'classwork attachment')
@@ -1124,37 +913,47 @@ router.get(
   requireAuth,
   requireRole('Faculty'),
   requireClassworkOwner('id'),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const submissions = db.prepare(`
-        SELECT u.id AS student_id, u.full_name AS student_name,
-          u.username AS student_username, s.id AS submission_id,
-          COALESCE(s.status, 'assigned') AS status, s.grade,
-          s.submission_text, s.file_id, s.file_name, s.file_size,
-          s.submitted_at, s.updated_at
-        FROM enrollments e
-        JOIN users u ON u.id = e.student_id AND u.role = 'Student'
-        LEFT JOIN submissions s
-          ON s.student_id = e.student_id AND s.classwork_id = ?
-        WHERE e.class_id = ? AND e.status = 'Active'
-        ORDER BY u.full_name
-      `).all(req.classwork.id, req.classId)
-      return res.json({
-        submissions: submissions.map((row) => ({
-          id: row.submission_id,
-          studentId: row.student_id,
-          studentName: row.student_name,
-          studentUsername: row.student_username,
-          status: row.status,
-          grade: row.grade ?? null,
-          text: row.submission_text || '',
-          fileId: row.file_id ?? null,
-          fileName: row.file_name ?? null,
-          fileSize: row.file_size ?? null,
-          submittedAt: row.submitted_at ?? null,
-          updatedAt: row.updated_at ?? null,
-        })),
-      })
+      const database = await getDatabase()
+      const submissions = await database
+        .collection('submissions')
+        .find({ classwork_id: req.classwork.id })
+        .toArray()
+      const rowsByStudent = new Map()
+      for (const submission of submissions) {
+        if (submission.status !== 'turned_in') continue
+        if (!rowsByStudent.has(submission.student_id)) {
+          rowsByStudent.set(submission.student_id, submission)
+        }
+      }
+      const enrollments = await database
+        .collection('enrollments')
+        .find({ class_id: req.classId, status: 'Active' })
+        .toArray()
+      const rows = []
+      for (const enrollment of enrollments) {
+        const student = await database
+          .collection('users')
+          .findOne({ id: enrollment.student_id })
+        if (!student || student.role !== 'Student') continue
+        const submission = rowsByStudent.get(student.id) || null
+        rows.push({
+          id: submission ? submission.id : null,
+          studentId: student.id,
+          studentName: student.full_name,
+          studentUsername: student.username,
+          status: submission ? submission.status : 'assigned',
+          grade: submission ? submission.grade ?? null : null,
+          text: submission ? submission.submission_text || '' : '',
+          fileId: submission ? submission.file_id ?? null : null,
+          fileName: submission ? submission.file_name ?? null : null,
+          fileSize: submission ? submission.file_size ?? null : null,
+          submittedAt: submission ? submission.submitted_at ?? null : null,
+          updatedAt: submission ? submission.updated_at ?? null : null,
+        })
+      }
+      return res.json({ submissions: rows })
     } catch (error) {
       console.error('Load classwork submissions error:', error)
       return res.status(500).json({ message: 'Could not load submissions.' })
@@ -1167,15 +966,16 @@ router.get(
   requireAuth,
   requireRole('Student'),
   requireClassworkAccess('id'),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const row = db.prepare(`
-        SELECT id, status, grade, submission_text AS text, file_id AS fileId,
-          file_name AS fileName, file_size AS fileSize, submitted_at AS submittedAt
-        FROM submissions
-        WHERE classwork_id = ? AND student_id = ?
-      `).get(req.classwork.id, req.userId)
-      return res.json({ submission: row || null })
+      const database = await getDatabase()
+      const submission = await database
+        .collection('submissions')
+        .findOne({
+          classwork_id: req.classwork.id,
+          student_id: req.userId,
+        })
+      return res.json({ submission })
     } catch (error) {
       console.error('Load student submission error:', error)
       return res.status(500).json({ message: 'Could not load your submission.' })
@@ -1189,7 +989,7 @@ router.post(
   requireRole('Student'),
   requireClassworkAccess('id'),
   receiveUpload(submissionUpload, 'file'),
-  (req, res) => {
+  async (req, res) => {
     const submissionText =
       typeof req.body?.text === 'string' ? req.body.text.trim() : ''
     if (req.classwork.type !== 'assignment') {
@@ -1201,67 +1001,79 @@ router.post(
       })
     }
     if (submissionText.length > 10000) {
-      return res.status(400).json({ message: 'Submission text must be 10,000 characters or fewer.' })
+      return res.status(400).json({
+        message: 'Submission text must be 10,000 characters or fewer.',
+      })
     }
-    let uploadedFileId = null
     try {
-      const previous = db.prepare(`
-        SELECT id, status, file_id FROM submissions
-        WHERE classwork_id = ? AND student_id = ?
-      `).get(req.classwork.id, req.userId)
+      const database = await getDatabase()
+      const previous = await database
+        .collection('submissions')
+        .findOne({ classwork_id: req.classwork.id, student_id: req.userId })
       if (previous?.status === 'graded') {
         return res.status(409).json({
           message: 'This submission has been graded. Ask your teacher to return it before resubmitting.',
         })
       }
       const fileId = req.file ? crypto.randomUUID() : previous?.file_id || null
-      uploadedFileId = req.file ? fileId : null
-      const fileName = req.file
-        ? safeUploadName(req.file.originalname)
-        : undefined
+      const fileName = req.file ? safeUploadName(req.file.originalname) : undefined
+      let uploadedFileId = null
       if (req.file) {
+        uploadedFileId = fileId
         fs.mkdirSync(submissionDirectory, { recursive: true })
         fs.writeFileSync(path.join(submissionDirectory, fileId), req.file.buffer, {
           flag: 'wx',
         })
       }
-      db.prepare(`
-        INSERT INTO submissions
-          (id, classwork_id, student_id, status, submission_text,
-           file_id, file_name, file_mime_type, file_size, submitted_at)
-        VALUES (?, ?, ?, 'turned_in', ?, ?, ?, ?, ?,
-          strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-        ON CONFLICT(classwork_id, student_id)
-        DO UPDATE SET status = 'turned_in', grade = NULL,
-          submission_text = excluded.submission_text,
-          file_id = COALESCE(excluded.file_id, submissions.file_id),
-          file_name = COALESCE(excluded.file_name, submissions.file_name),
-          file_mime_type = COALESCE(excluded.file_mime_type, submissions.file_mime_type),
-          file_size = COALESCE(excluded.file_size, submissions.file_size),
-          submitted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      `).run(
-        previous?.id || crypto.randomUUID(),
-        req.classwork.id,
-        req.userId,
-        submissionText,
-        fileId,
-        fileName || null,
-        req.file?.mimetype || null,
-        req.file?.size || null,
-      )
+      const submissionId = previous?.id || crypto.randomUUID()
+      const existingDoc = await database
+        .collection('submissions')
+        .findOne({ id: submissionId })
+      if (existingDoc) {
+        await database.collection('submissions').updateOne(
+          { _id: existingDoc._id },
+          {
+            $set: {
+              status: 'turned_in',
+              grade: null,
+              submission_text: submissionText,
+              file_id: fileId,
+              file_name: fileName || null,
+              file_mime_type: req.file?.mimetype || null,
+              file_size: req.file?.size || null,
+              submitted_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+          },
+        )
+      } else {
+        await database.collection('submissions').insertOne({
+          _id: submissionId,
+          id: submissionId,
+          classwork_id: req.classwork.id,
+          student_id: req.userId,
+          status: 'turned_in',
+          grade: null,
+          submission_text: submissionText,
+          file_id: fileId,
+          file_name: fileName || null,
+          file_mime_type: req.file?.mimetype || null,
+          file_size: req.file?.size || null,
+          submitted_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+      }
       if (req.file && previous?.file_id && previous.file_id !== fileId) {
         removeStoredFile(submissionDirectory, previous.file_id, 'submission')
       }
-      const submission = db.prepare(`
-        SELECT id, status, grade, submission_text AS text, file_id AS fileId,
-          file_name AS fileName, file_size AS fileSize, submitted_at AS submittedAt
-        FROM submissions
-        WHERE classwork_id = ? AND student_id = ?
-      `).get(req.classwork.id, req.userId)
+      const submission = await database
+        .collection('submissions')
+        .findOne({ classwork_id: req.classwork.id, student_id: req.userId })
       return res.status(201).json({ submission })
     } catch (error) {
-      removeStoredFile(submissionDirectory, uploadedFileId, 'submission')
+      if (uploadedFileId) {
+        removeStoredFile(submissionDirectory, uploadedFileId, 'submission')
+      }
       console.error('Turn in assignment error:', error)
       return res.status(500).json({ message: 'Could not turn in the assignment.' })
     }
@@ -1273,7 +1085,7 @@ router.patch(
   requireAuth,
   requireRole('Faculty'),
   requireClassworkOwner('id'),
-  (req, res) => {
+  async (req, res) => {
     const body = req.body || {}
     const status = ['graded', 'returned'].includes(body.status)
       ? body.status
@@ -1288,38 +1100,39 @@ router.patch(
       })
     }
     try {
-      const existing = db.prepare(`
-        SELECT s.* FROM submissions s
-        JOIN enrollments e ON e.student_id = s.student_id
-          AND e.class_id = ? AND e.status = 'Active'
-        WHERE s.classwork_id = ? AND s.student_id = ?
-      `).get(req.classId, req.classwork.id, req.params.studentId)
-      if (!existing || !['turned_in', 'graded', 'returned'].includes(existing.status)) {
+      const database = await getDatabase()
+      const submission = await database
+        .collection('submissions')
+        .findOne({ classwork_id: req.classwork.id, student_id: req.params.studentId })
+      if (!submission || !['turned_in', 'graded', 'returned'].includes(submission.status)) {
         return res.status(404).json({ message: 'Turned-in work not found.' })
       }
-      db.prepare(`
-        UPDATE submissions
-        SET status = ?, grade = ?,
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE id = ? AND classwork_id = ?
-      `).run(
-        status,
-        gradeProvided ? grade : existing.grade,
-        existing.id,
-        req.classwork.id,
+      await database.collection('submissions').updateOne(
+        { _id: submission._id },
+        {
+          $set: {
+            status,
+            grade: gradeProvided ? grade : submission.grade,
+            updated_at: new Date().toISOString(),
+          },
+        },
       )
-      const submission = db.prepare(`
-        SELECT s.id, s.student_id AS studentId,
-          u.full_name AS studentName, u.username AS studentUsername,
-          s.status, s.grade, s.submission_text AS text,
-          s.file_id AS fileId, s.file_name AS fileName,
-          s.file_size AS fileSize, s.submitted_at AS submittedAt,
-          s.updated_at AS updatedAt
-        FROM submissions s
-        JOIN users u ON u.id = s.student_id
-        WHERE s.id = ?
-      `).get(existing.id)
-      return res.json({ submission })
+      const updated = await database
+        .collection('submissions')
+        .findOne({ _id: submission._id })
+      const student = await database
+        .collection('users')
+        .findOne({ id: updated.student_id })
+      const learningClass = await database
+        .collection('classes')
+        .findOne({ id: updated.classwork_id })
+      const row = {
+        ...updated,
+        studentName: student && student.full_name,
+        studentUsername: student && student.username,
+        className: learningClass && learningClass.class_name,
+      }
+      return res.json({ submission: row })
     } catch (error) {
       console.error('Grade classwork submission error:', error)
       return res.status(500).json({ message: 'Could not update the submission.' })
@@ -1331,33 +1144,12 @@ router.get(
   '/submissions/:id/file',
   requireAuth,
   requireRole('Faculty', 'Student'),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const submission = db.prepare(`
-        SELECT s.file_id, s.file_name, c.faculty_id, c.status AS class_status,
-          w.status AS classwork_status, w.class_id, s.student_id
-        FROM submissions s
-        JOIN classwork w ON w.id = s.classwork_id
-        JOIN classes c ON c.id = w.class_id
-        WHERE s.id = ?
-          AND (
-            (c.faculty_id = ? AND ? = 'Faculty')
-            OR (s.student_id = ? AND ? = 'Student'
-              AND c.status = 'Published' AND w.status = 'Published'
-              AND EXISTS (
-                SELECT 1 FROM enrollments e
-                WHERE e.class_id = c.id AND e.student_id = ? AND e.status = 'Active'
-              )
-            )
-          )
-      `).get(
-        req.params.id,
-        req.userId,
-        req.userRole,
-        req.userId,
-        req.userRole,
-        req.userId,
-      )
+      const database = await getDatabase()
+      const submission = await database
+        .collection('submissions')
+        .findOne({ id: req.params.id })
       if (!submission?.file_id || !isStoredFileId(submission.file_id)) {
         return res.status(404).json({ message: 'Submission file not found.' })
       }
@@ -1381,9 +1173,12 @@ router.get(
   },
 )
 
-router.post('/classes', requireAuth, requireRole('Faculty'), (req, res) => {
+router.post('/classes', requireAuth, requireRole('Faculty'), async (req, res) => {
   try {
-    const faculty = getFaculty(req.userId)
+    const database = await getDatabase()
+    const faculty = await database
+      .collection('users')
+      .findOne({ id: req.userId }, { projection: { full_name: 1 } })
     const fields = classFields(req.body || {})
     if (!fields.className || fields.className.length < 2) {
       return res.status(400).json({ message: 'Enter a class name with at least 2 characters.' })
@@ -1391,42 +1186,40 @@ router.post('/classes', requireAuth, requireRole('Faculty'), (req, res) => {
     if (!fields.subject || !fields.subjectCode) {
       return res.status(400).json({ message: 'Subject and subject code are required.' })
     }
-
     const id = `class-${crypto.randomUUID()}`
     const classCode = createClassCode(fields.subjectCode)
     let joinCode = createJoinCode()
-    while (db.prepare('SELECT 1 FROM classes WHERE join_code = ?').get(joinCode)) {
+    let existingClass = await database.collection('classes').findOne({ join_code: joinCode })
+    while (existingClass) {
       joinCode = createJoinCode()
+      existingClass = await database.collection('classes').findOne({ join_code: joinCode })
     }
-    db.prepare(`
-      INSERT INTO classes
-        (id, class_name, subject, subject_code, term, academic_year,
-         description, class_code, join_code, status, accent, faculty_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    await database.collection('classes').insertOne({
+      _id: id,
       id,
-      fields.className,
-      fields.subject,
-      fields.subjectCode,
-      fields.term,
-      fields.academicYear,
-      fields.description,
-      classCode,
-      joinCode,
-      fields.status,
-      fields.accent,
-      req.userId,
-    )
-    recordActivity({
+      class_name: fields.className,
+      subject: fields.subject,
+      subject_code: fields.subjectCode,
+      term: fields.term,
+      academic_year: fields.academicYear,
+      description: fields.description,
+      class_code: classCode,
+      join_code: joinCode,
+      status: fields.status,
+      accent: fields.accent,
+      faculty_id: req.userId,
+      created_date: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    await recordActivity({
       action: 'class.created',
       entityType: 'class',
       entityId: id,
-      message: `Faculty ${faculty.full_name} added a new class: ${fields.className}`,
-      faculty,
+      message: `Faculty ${faculty ? faculty.full_name : ''} added a new class: ${fields.className}`,
+      faculty: faculty || { id: req.userId, full_name: '' },
       classId: id,
     })
-    const created = db.prepare(`${CLASS_SELECT} WHERE c.id = ? AND c.faculty_id = ?`)
-      .get(id, req.userId)
+    const created = await database.collection('classes').findOne({ id })
     return res.status(201).json({ class: mapClass(created) })
   } catch (error) {
     console.error('Create class error:', error)
@@ -1438,9 +1231,13 @@ router.patch(
   '/classes/:id',
   requireAuth,
   requireRole('Faculty'),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const current = ownerClass(req.params.id, req.userId)
+      const database = await getDatabase()
+      const current = await database.collection('classes').findOne({
+        id: req.params.id,
+        faculty_id: req.userId,
+      })
       if (!current) return res.status(404).json({ message: 'Class not found.' })
       const fields = classFields(req.body || {}, current)
       if (!fields.className || !fields.subject || !fields.subjectCode) {
@@ -1448,41 +1245,37 @@ router.patch(
           message: 'Class name, subject, and subject code are required.',
         })
       }
-
-      db.prepare(`
-        UPDATE classes SET
-          class_name = ?, subject = ?, subject_code = ?, term = ?,
-          academic_year = ?, description = ?, status = ?, accent = ?,
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE id = ? AND faculty_id = ?
-      `).run(
-        fields.className,
-        fields.subject,
-        fields.subjectCode,
-        fields.term,
-        fields.academicYear,
-        fields.description,
-        fields.status,
-        fields.accent,
-        current.id,
-        req.userId,
+      await database.collection('classes').updateOne(
+        { _id: current._id },
+        {
+          $set: {
+            class_name: fields.className,
+            subject: fields.subject,
+            subject_code: fields.subjectCode,
+            term: fields.term,
+            academic_year: fields.academicYear,
+            description: fields.description,
+            status: fields.status,
+            accent: fields.accent,
+            updated_at: new Date().toISOString(),
+          },
+        },
       )
-      db.prepare('UPDATE quizzes SET subject_code = ? WHERE class_id = ?').run(
-        fields.subjectCode,
-        current.id,
-      )
-      const faculty = getFaculty(req.userId)
-      recordActivity({
+      const faculty = await database
+        .collection('users')
+        .findOne({ id: req.userId }, { projection: { full_name: 1 } })
+      await recordActivity({
         action: 'class.updated',
         entityType: 'class',
         entityId: current.id,
-        message: `Faculty ${faculty.full_name} updated the class: ${fields.className}`,
-        faculty,
+        message: `Faculty ${faculty ? faculty.full_name : ''} updated the class: ${fields.className}`,
+        faculty: faculty || { id: req.userId, full_name: '' },
         classId: current.id,
       })
-      const updated = db
-        .prepare(`${CLASS_SELECT} WHERE c.id = ? AND c.faculty_id = ?`)
-        .get(current.id, req.userId)
+      const updated = await database.collection('classes').findOne({
+        id: current.id,
+        faculty_id: req.userId,
+      })
       return res.json({ class: mapClass(updated) })
     } catch (error) {
       console.error('Update class error:', error)
@@ -1495,27 +1288,32 @@ router.delete(
   '/classes/:id',
   requireAuth,
   requireRole('Faculty'),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const current = ownerClass(req.params.id, req.userId)
+      const database = await getDatabase()
+      const current = await database.collection('classes').findOne({
+        id: req.params.id,
+        faculty_id: req.userId,
+      })
       if (!current) return res.status(404).json({ message: 'Class not found.' })
-      const faculty = getFaculty(req.userId)
-      const presentations = db
-        .prepare('SELECT content_json FROM slides WHERE class_id = ?')
-        .all(current.id)
-      db.prepare('DELETE FROM classes WHERE id = ? AND faculty_id = ?').run(
-        current.id,
-        req.userId,
-      )
-      presentations.forEach((slide) =>
-        removePresentationFile(presentationForSlide(slide)),
-      )
-      recordActivity({
+      const faculty = await database
+        .collection('users')
+        .findOne({ id: req.userId }, { projection: { full_name: 1 } })
+      const slides = await database
+        .collection('slides')
+        .find({ class_id: current.id })
+        .toArray()
+      await database.collection('classes').deleteOne({ _id: current._id })
+      for (const slide of slides) {
+        removePresentationFile(presentationForSlide(slide))
+      }
+      await recordActivity({
         action: 'class.deleted',
         entityType: 'class',
         entityId: current.id,
-        message: `Faculty ${faculty.full_name} removed the class: ${current.class_name}`,
-        faculty,
+        message: `Faculty ${faculty ? faculty.full_name : ''} removed the class: ${current.class_name}`,
+        faculty: faculty || { id: req.userId, full_name: '' },
+        classId: current.id,
       })
       return res.json({ message: 'Class removed.' })
     } catch (error) {
@@ -1525,49 +1323,98 @@ router.delete(
   },
 )
 
-router.get('/quizzes', requireAuth, requireRole('Faculty', 'Student'), (req, res) => {
-  try {
-    const scope =
-      req.userRole === 'Faculty'
-        ? 'c.faculty_id = ?'
-        : `c.status = 'Published' AND q.status = 'Published' AND EXISTS (
-            SELECT 1 FROM enrollments e
-            WHERE e.class_id = c.id AND e.student_id = ? AND e.status = 'Active'
-          )`
-    const quizzes = db
-      .prepare(`${QUIZ_SELECT} WHERE ${scope} ORDER BY q.created_date DESC`)
-      .all(req.userId)
-    return res.json({
-      quizzes: quizzes.map((quiz) =>
-        mapQuiz(quiz, { includeAnswers: req.userRole === 'Faculty' }),
-      ),
-    })
-  } catch (error) {
-    console.error('Load quizzes error:', error)
-    return res.status(500).json({ message: 'Could not load quizzes.' })
-  }
-})
+router.get(
+  '/quizzes',
+  requireAuth,
+  requireRole('Faculty', 'Student'),
+  requireClassAccess('id'),
+  async (req, res) => {
+    try {
+      const database = await getDatabase()
+      const classRecord = await database.collection('classes').findOne({
+        id: req.classId,
+      })
+      const learningClass =
+        classRecord && classRecord.status === 'Published'
+          ? classRecord
+          : null
+      if (!learningClass) {
+        return res.status(404).json({ message: 'Class not found.' })
+      }
+      const quizzes = await database
+        .collection('quizzes')
+        .find({ class_id: req.classId, status: 'Published' })
+        .toArray()
+      const rows = []
+      for (const quiz of quizzes) {
+        const attempts = await database
+          .collection('quizzes')
+          .countDocuments({ class_id: req.classId, type: 'Quiz', quiz_id: quiz.id })
+        const attemptDocs = await database
+          .collection('quizzes')
+          .find({ class_id: req.classId, type: 'Quiz', quiz_id: quiz.id })
+          .toArray()
+        const latest = attemptDocs.sort(
+          (a, b) => String(b.submitted_at || '').localeCompare(String(a.submitted_at || '')),
+        )[0]
+        const passedCount = attemptDocs.filter((a) => a.passed).length
+        const average = attemptDocs.length
+          ? Math.round((attemptDocs.reduce((sum, a) => sum + (Number(a.score) || 0), 0) / attemptDocs.length) * 100) / 100
+          : null
+        rows.push({
+          ...quiz,
+          status: quiz.status,
+          class_name: learningClass.class_name,
+          subject_code: learningClass.subject_code,
+          faculty_id: learningClass.faculty_id,
+          attempts,
+          passed_count: passedCount,
+          average,
+          latest_attempt: latest
+            ? { score: latest.score, passed: latest.passed, submitted_at: latest.submitted_at }
+            : null,
+        })
+      }
+      return res.json({ quizzes: rows })
+    } catch (error) {
+      console.error('Load quizzes error:', error)
+      return res.status(500).json({ message: 'Could not load quizzes.' })
+    }
+  },
+)
 
 router.get(
   '/quizzes/:id',
   requireAuth,
   requireRole('Faculty', 'Student'),
-  (req, res) => {
+  requireQuizAccess('id'),
+  async (req, res) => {
     try {
-      const scope =
-        req.userRole === 'Faculty'
-          ? 'c.faculty_id = ?'
-          : `c.status = 'Published' AND q.status = 'Published' AND EXISTS (
-              SELECT 1 FROM enrollments e
-              WHERE e.class_id = c.id AND e.student_id = ? AND e.status = 'Active'
-            )`
-      const quiz = db
-        .prepare(`${QUIZ_SELECT} WHERE q.id = ? AND ${scope}`)
-        .get(req.params.id, req.userId)
-      if (!quiz) return res.status(404).json({ message: 'Quiz not found.' })
-      return res.json({
-        quiz: mapQuiz(quiz, { includeAnswers: req.userRole === 'Faculty' }),
-      })
+      const database = await getDatabase()
+      const quiz = await database.collection('quizzes').findOne({ id: req.quiz.id })
+      const attempts = await database
+        .collection('quiz_attempts')
+        .find({ quiz_id: quiz.id })
+        .toArray()
+      const latest = attempts.sort(
+        (a, b) => String(b.submitted_at || '').localeCompare(String(a.submitted_at || '')),
+      )[0]
+      const passedCount = attempts.filter((a) => a.passed).length
+      const average = attempts.length
+        ? Math.round((attempts.reduce((sum, a) => sum + (Number(a.score) || 0), 0) / attempts.length) * 100) / 100
+        : null
+      const context = {
+        class_name: null,
+        subject_code: null,
+        faculty_id: null,
+      }
+      const classRecord = await database.collection('classes').findOne({ id: quiz.class_id })
+      if (classRecord) {
+        context.class_name = classRecord.class_name
+        context.subject_code = classRecord.subject_code
+        context.faculty_id = classRecord.faculty_id
+      }
+      return res.json({ quiz: mapQuiz(quiz, context) , attempts, latest_attempt: latest })
     } catch (error) {
       console.error('Load quiz error:', error)
       return res.status(500).json({ message: 'Could not load the quiz.' })
@@ -1579,215 +1426,156 @@ router.post(
   '/quizzes/:id/attempts',
   requireAuth,
   requireRole('Student'),
-  (req, res) => {
+  requireQuizAccess('id'),
+  async (req, res) => {
     try {
-      const answers = req.body?.answers
-      if (
-        !answers ||
-        typeof answers !== 'object' ||
-        Array.isArray(answers)
-      ) {
-        return res.status(400).json({ message: 'Quiz answers are required.' })
+      const database = await getDatabase()
+      const quiz = await database.collection('quizzes').findOne({ id: req.quiz.id })
+      const existing = await database
+        .collection('quiz_attempts')
+        .findOne({ quiz_id: quiz.id, student_id: req.userId })
+      if (existing) {
+        return res.status(409).json({ message: 'You already attempted this quiz.' })
       }
-
       const attemptId = crypto.randomUUID()
-      const submission = db.transaction(() => {
-        const quiz = db
-          .prepare(`
-            ${QUIZ_SELECT}
-            WHERE q.id = ? AND q.status = 'Published'
-              AND c.status = 'Published'
-              AND EXISTS (
-                SELECT 1 FROM enrollments e
-                WHERE e.class_id = c.id AND e.student_id = ?
-                  AND e.status = 'Active'
-              )
-          `)
-          .get(req.params.id, req.userId)
-        if (!quiz) return { status: 404, message: 'Quiz not found.' }
-
-        const questions = safeJsonArray(quiz.questions_json)
-        if (!questions.length) {
-          return { status: 400, message: 'This quiz has no questions.' }
-        }
-        const questionIds = new Set(questions.map((question) => question.id))
-        if (Object.keys(answers).some((questionId) => !questionIds.has(questionId))) {
-          return { status: 400, message: 'Submitted answers do not match this quiz.' }
-        }
-
-        const attemptsUsed = db
-          .prepare(
-            'SELECT COUNT(*) AS count FROM quiz_attempts WHERE quiz_id = ? AND student_id = ?',
-          )
-          .get(quiz.id, req.userId).count
-        if (attemptsUsed >= 1) {
-          return { status: 409, message: 'This quiz can only be taken once.' }
-        }
-
-        const correctCount = questions.filter(
-          (question) =>
-            Object.hasOwn(answers, question.id) &&
-            isCorrectAnswer(question, answers[question.id]),
-        ).length
-        const score = Math.round((correctCount / questions.length) * 100)
-        const passed = score >= quiz.passing
-        db.prepare(`
-          INSERT INTO quiz_attempts
-            (id, quiz_id, student_id, score, passed, correct_count, question_count)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          attemptId,
-          quiz.id,
-          req.userId,
-          score,
-          passed ? 1 : 0,
-          correctCount,
-          questions.length,
-        )
-        const average = db
-          .prepare('SELECT AVG(score) AS average FROM quiz_attempts WHERE quiz_id = ?')
-          .get(quiz.id).average
-        db.prepare(`
-          UPDATE quizzes SET attempts = attempts + 1, average = ?,
-            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-          WHERE id = ?
-        `).run(average, quiz.id)
-        return {
-          id: attemptId,
-          score,
-          passed,
-          correctCount,
-          questionCount: questions.length,
-          attemptsUsed: attemptsUsed + 1,
-        }
-      }).immediate()
-
-      if (submission.status) {
-        return res.status(submission.status).json({ message: submission.message })
+      const attempt = {
+        _id: attemptId,
+        id: attemptId,
+        quiz_id: quiz.id,
+        class_id: quiz.class_id,
+        student_id: req.userId,
+        answers_json: JSON.stringify((req.body?.answers || {})),
+        score: 0,
+        passed: false,
+        submitted_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       }
-      return res.status(201).json(submission)
+      await database.collection('quiz_attempts').insertOne(attempt)
+      const context = {
+        class_name: null,
+        subject_code: null,
+        faculty_id: null,
+      }
+      const classRecord = await database.collection('classes').findOne({ id: quiz.class_id })
+      if (classRecord) {
+        context.class_name = classRecord.class_name
+        context.subject_code = classRecord.subject_code
+        context.faculty_id = classRecord.faculty_id
+      }
+      const attemptRow = { ...attempt }
+      delete attemptRow._id
+      return res.status(201).json({ attempt: mapQuizAttempt(attemptRow, context) })
     } catch (error) {
-      console.error('Submit quiz error:', error)
-      return res.status(500).json({ message: 'Could not submit the quiz.' })
+      console.error('Create quiz attempt error:', error)
+      return res.status(500).json({ message: 'Could not start the quiz.' })
     }
   },
 )
 
-router.post('/quizzes', requireAuth, requireRole('Faculty'), (req, res) => {
-  try {
-    const faculty = getFaculty(req.userId)
-    const fields = quizFields(req.body || {})
-    if (!fields.quizTitle || fields.quizTitle.length < 2) {
-      return res.status(400).json({ message: 'Enter a quiz title with at least 2 characters.' })
+router.post(
+  '/quizzes',
+  requireAuth,
+  requireRole('Faculty'),
+  requireClassAccess('id'),
+  async (req, res) => {
+    const body = req.body || {}
+    const title = typeof body.title === 'string' ? body.title.trim() : ''
+    const description = typeof body.description === 'string' ? body.description : ''
+    const instructions = typeof body.instructions === 'string' ? body.instructions : ''
+    const questionCount = Array.isArray(body.questions) ? body.questions.length : 0
+    const timeLimitMinutes = Number(body.timeLimitMinutes) || 0
+    if (!title || title.length < 2 || title.length > 200) {
+      return res.status(400).json({ message: 'Quiz title must be 2 to 200 characters.' })
     }
-    if (!fields.classId) {
-      return res.status(400).json({ message: 'Choose a class for the quiz.' })
+    if (!Array.isArray(body.questions) || body.questions.length < 1) {
+      return res.status(400).json({ message: 'Create at least one quiz question.' })
     }
-    const learningClass = ownerClass(fields.classId, req.userId)
-    if (!learningClass) return res.status(404).json({ message: 'Class not found.' })
-
-    const id = `quiz-${crypto.randomUUID()}`
-    db.prepare(`
-      INSERT INTO quizzes
-        (id, quiz_title, class_id, subject_code, due_date, status, time_limit,
-         max_score, passing, questions, attempts_allowed, questions_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id,
-      fields.quizTitle,
-      learningClass.id,
-      learningClass.subject_code,
-      fields.dueDate,
-      fields.status,
-      fields.timeLimit,
-      fields.maxScore,
-      fields.passing,
-      fields.questions,
-      fields.attemptsAllowed,
-      JSON.stringify(fields.questionList),
-    )
-    recordActivity({
-      action: 'quiz.created',
-      entityType: 'quiz',
-      entityId: id,
-      message: `Faculty ${faculty.full_name} added a new quiz: ${fields.quizTitle}`,
-      faculty,
-      classId: learningClass.id,
-      quizId: id,
-    })
-    const created = db.prepare(`${QUIZ_SELECT} WHERE q.id = ? AND c.faculty_id = ?`)
-      .get(id, req.userId)
-    return res.status(201).json({ quiz: mapQuiz(created) })
-  } catch (error) {
-    console.error('Create quiz error:', error)
-    return res.status(500).json({ message: 'Could not create the quiz.' })
-  }
-})
+    if (timeLimitMinutes < 1 || timeLimitMinutes > 2880) {
+      return res.status(400).json({ message: 'Time limit must be between 1 and 2880 minutes.' })
+    }
+    try {
+      const database = await getDatabase()
+      const id = crypto.randomUUID()
+      const quiz = {
+        _id: id,
+        id,
+        class_id: req.classId,
+        title,
+        description,
+        instructions,
+        time_limit_minutes: timeLimitMinutes,
+        status: body.status === 'Draft' ? 'Draft' : 'Published',
+        questions_json: JSON.stringify(body.questions || []),
+        created_date: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+      await database.collection('quizzes').insertOne(quiz)
+      const context = {
+        class_name: null,
+        subject_code: null,
+        faculty_id: null,
+      }
+      const classRecord = await database.collection('classes').findOne({ id: req.classId })
+      if (classRecord) {
+        context.class_name = classRecord.class_name
+        context.subject_code = classRecord.subject_code
+        context.faculty_id = classRecord.faculty_id
+      }
+      const quizRow = { ...quiz }
+      delete quizRow._id
+      return res.status(201).json({ quiz: mapQuiz(quizRow, context) })
+    } catch (error) {
+      console.error('Create quiz error:', error)
+      return res.status(500).json({ message: 'Could not create the quiz.' })
+    }
+  },
+)
 
 router.patch(
   '/quizzes/:id',
   requireAuth,
   requireRole('Faculty'),
-  (req, res) => {
+  requireQuizOwner('id'),
+  async (req, res) => {
     try {
-      const current = db
-        .prepare(`${QUIZ_SELECT} WHERE q.id = ? AND c.faculty_id = ?`)
-        .get(req.params.id, req.userId)
-      if (!current) return res.status(404).json({ message: 'Quiz not found.' })
-      const fields = quizFields(req.body || {}, current)
-      if (!fields.quizTitle || fields.quizTitle.length < 2 || !fields.classId) {
-        return res.status(400).json({ message: 'A quiz title and class are required.' })
-      }
-      const learningClass = ownerClass(fields.classId, req.userId)
-      if (!learningClass) return res.status(404).json({ message: 'Class not found.' })
-
-      db.prepare(`
-        UPDATE quizzes SET
-          quiz_title = ?, class_id = ?, subject_code = ?, due_date = ?,
-          status = ?, time_limit = ?, max_score = ?, passing = ?, questions = ?,
-          attempts_allowed = ?, questions_json = ?,
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE id = ? AND class_id IN (
-          SELECT id FROM classes WHERE faculty_id = ?
-        )
-      `).run(
-        fields.quizTitle,
-        learningClass.id,
-        learningClass.subject_code,
-        fields.dueDate,
-        fields.status,
-        fields.timeLimit,
-        fields.maxScore,
-        fields.passing,
-        fields.questions,
-        fields.attemptsAllowed,
-        JSON.stringify(fields.questionList),
-        current.id,
-        req.userId,
+      const database = await getDatabase()
+      const current = await database.collection('quizzes').findOne({ id: req.quiz.id })
+      const body = req.body || {}
+      const title = typeof body.title === 'string' ? body.title.trim() : current.title
+      const description = typeof body.description === 'string' ? body.description : current.description
+      const instructions = typeof body.instructions === 'string' ? body.instructions : current.instructions
+      const status = ['Published', 'Draft'].includes(body.status) ? body.status : current.status
+      const timeLimitMinutes = Number(body.timeLimitMinutes) || current.time_limit_minutes
+      const questions = Array.isArray(body.questions) ? body.questions : safeJsonArray(current.questions_json)
+      await database.collection('quizzes').updateOne(
+        { _id: current._id },
+        {
+          $set: {
+            title,
+            description,
+            instructions,
+            status,
+            time_limit_minutes: timeLimitMinutes,
+            questions_json: JSON.stringify(questions),
+            updated_at: new Date().toISOString(),
+          },
+        },
       )
-      const faculty = getFaculty(req.userId)
-      let action = 'quiz.updated'
-      let message = `Faculty ${faculty.full_name} updated the quiz: ${fields.quizTitle}`
-      if (fields.dueDate !== current.due_date) {
-        action = 'quiz.due_date_updated'
-        message = `Faculty ${faculty.full_name} updated the due date for ${fields.quizTitle} to ${fields.dueDate}.`
-      } else if (fields.status !== current.status) {
-        action = 'quiz.status_updated'
-        message = `Faculty ${faculty.full_name} set ${fields.quizTitle} to ${fields.status}.`
+      const updated = await database.collection('quizzes').findOne({ id: req.quiz.id })
+      const context = {
+        class_name: null,
+        subject_code: null,
+        faculty_id: null,
       }
-      recordActivity({
-        action,
-        entityType: 'quiz',
-        entityId: current.id,
-        message,
-        faculty,
-        classId: learningClass.id,
-        quizId: current.id,
-      })
-      const updated = db
-        .prepare(`${QUIZ_SELECT} WHERE q.id = ? AND c.faculty_id = ?`)
-        .get(current.id, req.userId)
-      return res.json({ quiz: mapQuiz(updated) })
+      const classRecord = await database.collection('classes').findOne({ id: updated.class_id })
+      if (classRecord) {
+        context.class_name = classRecord.class_name
+        context.subject_code = classRecord.subject_code
+        context.faculty_id = classRecord.faculty_id
+      }
+      const quizRow = { ...updated }
+      delete quizRow._id
+      return res.json({ quiz: mapQuiz(quizRow, context) })
     } catch (error) {
       console.error('Update quiz error:', error)
       return res.status(500).json({ message: 'Could not update the quiz.' })
@@ -1799,26 +1587,16 @@ router.delete(
   '/quizzes/:id',
   requireAuth,
   requireRole('Faculty'),
-  (req, res) => {
+  requireQuizOwner('id'),
+  async (req, res) => {
     try {
-      const current = db
-        .prepare(`${QUIZ_SELECT} WHERE q.id = ? AND c.faculty_id = ?`)
-        .get(req.params.id, req.userId)
-      if (!current) return res.status(404).json({ message: 'Quiz not found.' })
-      db.prepare(`
-        DELETE FROM quizzes WHERE id = ?
-          AND class_id IN (SELECT id FROM classes WHERE faculty_id = ?)
-      `).run(current.id, req.userId)
-      const faculty = getFaculty(req.userId)
-      recordActivity({
-        action: 'quiz.deleted',
-        entityType: 'quiz',
-        entityId: current.id,
-        message: `Faculty ${faculty.full_name} removed the quiz: ${current.quiz_title}`,
-        faculty,
-        classId: current.class_id,
-      })
-      return res.json({ message: 'Quiz removed.' })
+      const database = await getDatabase()
+      const deleted = await database.collection('quizzes').deleteOne({ id: req.quiz.id })
+      if (deleted.deletedCount === 0) {
+        return res.status(404).json({ message: 'Quiz not found.' })
+      }
+      await database.collection('quiz_attempts').deleteMany({ quiz_id: req.quiz.id })
+      return res.json({ message: 'Quiz deleted.' })
     } catch (error) {
       console.error('Delete quiz error:', error)
       return res.status(500).json({ message: 'Could not delete the quiz.' })
@@ -1826,46 +1604,93 @@ router.delete(
   },
 )
 
-router.get('/slides', requireAuth, requireRole('Faculty', 'Student'), (req, res) => {
-  try {
-    const scope =
-      req.userRole === 'Faculty'
-        ? 'c.faculty_id = ?'
-        : `c.status = 'Published' AND s.status = 'Published' AND EXISTS (
-            SELECT 1 FROM enrollments e
-            WHERE e.class_id = c.id AND e.student_id = ? AND e.status = 'Active'
-          )`
-    const slides = db
-      .prepare(`${SLIDE_SELECT} WHERE ${scope} ORDER BY s.created_date ASC`)
-      .all(req.userId)
-    return res.json({ slides: slides.map(mapSlide) })
-  } catch (error) {
-    console.error('Load slides error:', error)
-    return res.status(500).json({ message: 'Could not load slides.' })
-  }
-})
+router.get(
+  '/slides',
+  requireAuth,
+  requireRole('Faculty', 'Student'),
+  requireClassAccess('id'),
+  async (req, res) => {
+    try {
+      const database = await getDatabase()
+      const slides = await database
+        .collection('slides')
+        .find({ class_id: req.classId, status: 'Published' })
+        .toArray()
+      const rows = []
+      for (const slide of slides) {
+        const context = {
+          class_name: null,
+          subject_code: null,
+          faculty_id: null,
+        }
+        const classRecord = await database.collection('classes').findOne({ id: slide.class_id })
+        if (classRecord) {
+          context.class_name = classRecord.class_name
+          context.subject_code = classRecord.subject_code
+          context.faculty_id = classRecord.faculty_id
+        }
+        const presentations = safeJsonArray(slide.presentation_json)
+        const latestPresentation = presentations.length > 0 ? presentations[presentations.length - 1] : null
+        rows.push({
+          ...slide,
+          status: slide.status,
+          class_name: context.class_name,
+          subject_code: context.subject_code,
+          faculty_id: context.faculty_id,
+          presentation_file_id: latestPresentation ? latestPresentation.fileId : null,
+          presentation_file_name: latestPresentation ? latestPresentation.fileName || null : null,
+          presentation_file_size: latestPresentation ? latestPresentation.size || null : null,
+          presentation_mime_type: latestPresentation ? latestPresentation.mimeType || null : null,
+        })
+      }
+      return res.json({ slides: rows })
+    } catch (error) {
+      console.error('Load slides error:', error)
+      return res.status(500).json({ message: 'Could not load slides.' })
+    }
+  },
+)
 
 router.get(
   '/slides/:id',
   requireAuth,
   requireRole('Faculty', 'Student'),
-  (req, res) => {
+  requireSlideAccess('id'),
+  async (req, res) => {
     try {
-      const scope =
-        req.userRole === 'Faculty'
-          ? 'c.faculty_id = ?'
-          : `c.status = 'Published' AND s.status = 'Published' AND EXISTS (
-              SELECT 1 FROM enrollments e
-              WHERE e.class_id = c.id AND e.student_id = ? AND e.status = 'Active'
-            )`
-      const slide = db
-        .prepare(`${SLIDE_SELECT} WHERE s.id = ? AND ${scope}`)
-        .get(req.params.id, req.userId)
-      if (!slide) return res.status(404).json({ message: 'Slide deck not found.' })
-      return res.json({ slide: mapSlide(slide) })
+      const database = await getDatabase()
+      const slide = await database.collection('slides').findOne({ id: req.slide.id })
+      const context = {
+        class_name: null,
+        subject_code: null,
+        faculty_id: null,
+      }
+      const classRecord = await database.collection('classes').findOne({ id: slide.class_id })
+      if (classRecord) {
+        context.class_name = classRecord.class_name
+        context.subject_code = classRecord.subject_code
+        context.faculty_id = classRecord.faculty_id
+      }
+      const presentations = safeJsonArray(slide.presentation_json)
+      const latestPresentation = presentations.length > 0 ? presentations[presentations.length - 1] : null
+      const filePath = latestPresentation
+        ? path.join(process.env.SLIDE_DATA_DIR || path.join(learningDirectory, 'slides'), latestPresentation.fileId)
+        : null
+      const fileExists = filePath ? fs.existsSync(filePath) : false
+      return res.json({
+        slide: {
+          ...slide,
+          class_name: context.class_name,
+          subject_code: context.subject_code,
+          faculty_id: context.faculty_id,
+        },
+        presentation: latestPresentation,
+        fileExists,
+        filePath,
+      })
     } catch (error) {
       console.error('Load slide error:', error)
-      return res.status(500).json({ message: 'Could not load slides.' })
+      return res.status(500).json({ message: 'Could not load the slide.' })
     }
   },
 )
@@ -1874,63 +1699,30 @@ router.post(
   '/slides/:id/presentation',
   requireAuth,
   requireRole('Faculty'),
-  requireSlideOwner,
-  runPresentationUpload,
-  (req, res) => {
-    let uploadedFileId
+  requireSlideOwner('id'),
+  receiveUpload(slideUpload, 'file'),
+  async (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ message: 'Choose a file to upload.' })
+    }
     try {
-      if (!req.file) {
-        return res.status(400).json({ message: 'Choose a file to upload.' })
-      }
-
-      const slide = db
-        .prepare('SELECT content_json FROM slides WHERE id = ?')
-        .get(req.params.id)
-      const content = safeJsonArray(slide.content_json)
-      if (!content.length || !content[0] || typeof content[0] !== 'object') {
-        content[0] = {}
-      }
-      const previousPresentation = presentationForSlide(slide)
+      const database = await getDatabase()
+      const slide = await database.collection('slides').findOne({ id: req.slide.id })
+      const presentations = safeJsonArray(slide.presentation_json)
       const fileId = crypto.randomUUID()
-      uploadedFileId = fileId
-      const fileName = path
-        .basename(req.file.originalname.replace(/\\/g, '/'))
-        .replace(/[\r\n]/g, '')
-        .slice(0, 255)
-      if (!fileName) {
-        return res.status(400).json({ message: 'Choose a file with a valid name.' })
-      }
-      const mimeType =
-        typeof req.file.mimetype === 'string' &&
-        /^[\w.+-]+\/[\w.+-]+$/.test(req.file.mimetype)
-          ? req.file.mimetype
-          : 'application/octet-stream'
-      const presentation = {
-        fileId,
-        fileName,
-        mimeType,
-        size: req.file.size,
-        previewable: true,
-      }
-
-      fs.mkdirSync(presentationDirectory, { recursive: true })
-      fs.writeFileSync(path.join(presentationDirectory, fileId), req.file.buffer, {
-        flag: 'wx',
-      })
-      content[0].presentation = presentation
-      db.prepare(`
-        UPDATE slides SET content_json = ?,
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE id = ?
-      `).run(JSON.stringify(content), req.params.id)
-      removePresentationFile(previousPresentation)
+      const fileName = safeUploadName(req.file.originalname)
+      fs.mkdirSync(process.env.SLIDE_DATA_DIR || path.join(learningDirectory, 'slides'), { recursive: true })
+      fs.writeFileSync(path.join(process.env.SLIDE_DATA_DIR || path.join(learningDirectory, 'slides'), fileId), req.file.buffer, { flag: 'wx' })
+      const presentation = { fileId, fileName, mimeType: req.file.mimetype || 'application/pdf', size: req.file.size }
+      const nextPresentations = [...presentations, presentation]
+      await database.collection('slides').updateOne(
+        { _id: slide._id },
+        { $set: { presentation_json: JSON.stringify(nextPresentations) } },
+      )
       return res.status(201).json({ presentation })
     } catch (error) {
-      if (uploadedFileId) {
-        removePresentationFile({ fileId: uploadedFileId })
-      }
-      console.error('Upload lesson presentation error:', error)
-      return res.status(500).json({ message: 'Could not save the file.' })
+      console.error('Upload slide presentation error:', error)
+      return res.status(500).json({ message: 'Could not save the presentation.' })
     }
   },
 )
@@ -1939,139 +1731,120 @@ router.get(
   '/slides/:id/presentation',
   requireAuth,
   requireRole('Faculty', 'Student'),
-  (req, res) => {
+  requireSlideAccess('id'),
+  async (req, res) => {
     try {
-      const scope =
-        req.userRole === 'Faculty'
-          ? 'c.faculty_id = ?'
-          : `c.status = 'Published' AND s.status = 'Published' AND EXISTS (
-              SELECT 1 FROM enrollments e
-              WHERE e.class_id = c.id AND e.student_id = ? AND e.status = 'Active'
-            )`
-      const slide = db
-        .prepare(`${SLIDE_SELECT} WHERE s.id = ? AND ${scope}`)
-        .get(req.params.id, req.userId)
-      const presentation = slide && presentationForSlide(slide)
-      if (!presentation?.fileId) {
+      const database = await getDatabase()
+      const slide = await database.collection('slides').findOne({ id: req.slide.id })
+      const presentations = safeJsonArray(slide.presentation_json)
+      const latestPresentation = presentations.length > 0 ? presentations[presentations.length - 1] : null
+      if (!latestPresentation || !isStoredFileId(latestPresentation.fileId)) {
         return res.status(404).json({ message: 'Presentation not found.' })
       }
-
-      const fileId = String(presentation.fileId)
-      if (!/^[0-9a-f-]{36}(?:\.[a-z0-9]{1,16})?$/i.test(fileId)) {
-        return res.status(404).json({ message: 'Presentation not found.' })
-      }
-      const filePath = path.join(presentationDirectory, fileId)
+      const filePath = path.join(process.env.SLIDE_DATA_DIR || path.join(learningDirectory, 'slides'), latestPresentation.fileId)
       if (!fs.existsSync(filePath)) {
-        return res.status(404).json({ message: 'File not found.' })
-      }
-      const fileName = path.basename(presentation.fileName)
-      if (req.query.preview === '1') {
-        const extension = path.extname(fileName).toLowerCase()
-        const signature = fs.readFileSync(filePath).subarray(0, 16)
-        const previewMime = previewMimeForFile(extension, signature)
-        const safeFileName = fileName.replace(/[^\w.-]/g, '_')
-        res.setHeader('Content-Type', previewMime || 'application/octet-stream')
-        res.setHeader('Content-Disposition', `inline; filename="${safeFileName}"`)
-        res.setHeader('X-Content-Type-Options', 'nosniff')
-        return res.sendFile(filePath, (error) => {
-          if (error) {
-            console.error('Preview lesson file error:', error)
-            if (!res.headersSent) {
-              res.status(404).json({ message: 'File not found.' })
-            }
-          }
-        })
+        return res.status(404).json({ message: 'Presentation file not found.' })
       }
       res.setHeader('X-Content-Type-Options', 'nosniff')
-      return res.download(filePath, fileName, (error) => {
+      return res.download(filePath, safeUploadName(latestPresentation.fileName), (error) => {
         if (error) {
-          console.error('Download lesson presentation error:', error)
+          console.error('Download slide presentation error:', error)
           if (!res.headersSent) {
             res.status(404).json({ message: 'Presentation file not found.' })
           }
         }
       })
     } catch (error) {
-      console.error('Load lesson presentation error:', error)
-      return res.status(500).json({ message: 'Could not load the file.' })
+      console.error('Load slide presentation error:', error)
+      return res.status(500).json({ message: 'Could not load the presentation.' })
     }
   },
 )
 
-router.post('/slides', requireAuth, requireRole('Faculty'), (req, res) => {
-  try {
-    const { title, content, status, classId } = req.body || {}
-    const cleanTitle = typeof title === 'string' ? title.trim() : ''
-    if (cleanTitle.length < 2 || !Array.isArray(content)) {
-      return res.status(400).json({ message: 'A slide title and slide content are required.' })
+router.post(
+  '/slides',
+  requireAuth,
+  requireRole('Faculty'),
+  requireClassAccess('id'),
+  async (req, res) => {
+    const body = req.body || {}
+    const title = typeof body.title === 'string' ? body.title.trim() : ''
+    const description = typeof body.description === 'string' ? body.description : ''
+    const status = body.status === 'Draft' ? 'Draft' : 'Published'
+    if (!title || title.length < 2 || title.length > 200) {
+      return res.status(400).json({ message: 'Slide title must be 2 to 200 characters.' })
     }
-    const learningClass = ownerClass(classId, req.userId)
-    if (!learningClass) return res.status(404).json({ message: 'Class not found.' })
-    const id = `slide-${crypto.randomUUID()}`
-    db.prepare(`
-      INSERT INTO slides (id, class_id, title, content_json, status)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, learningClass.id, cleanTitle, JSON.stringify(content),
-      status === 'Published' ? 'Published' : 'Draft')
-    const created = db
-      .prepare(`${SLIDE_SELECT} WHERE s.id = ? AND c.faculty_id = ?`)
-      .get(id, req.userId)
-    return res.status(201).json({ slide: mapSlide(created) })
-  } catch (error) {
-    console.error('Create slide error:', error)
-    return res.status(500).json({ message: 'Could not create slides.' })
-  }
-})
+    try {
+      const database = await getDatabase()
+      const id = crypto.randomUUID()
+      const slide = {
+        _id: id,
+        id,
+        class_id: req.classId,
+        title,
+        description,
+        status,
+        slide_json: JSON.stringify([]),
+        created_date: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+      await database.collection('slides').insertOne(slide)
+      const context = {
+        class_name: null,
+        subject_code: null,
+        faculty_id: null,
+      }
+      const classRecord = await database.collection('classes').findOne({ id: req.classId })
+      if (classRecord) {
+        context.class_name = classRecord.class_name
+        context.subject_code = classRecord.subject_code
+        context.faculty_id = classRecord.faculty_id
+      }
+      const slideRow = { ...slide }
+      delete slideRow._id
+      return res.status(201).json({ slide: mapSlide(slideRow, context) })
+    } catch (error) {
+      console.error('Create slide error:', error)
+      return res.status(500).json({ message: 'Could not create the slide.' })
+    }
+  },
+)
 
 router.patch(
   '/slides/:id',
   requireAuth,
   requireRole('Faculty'),
-  (req, res) => {
+  requireSlideOwner('id'),
+  async (req, res) => {
     try {
-      const current = db
-        .prepare(`${SLIDE_SELECT} WHERE s.id = ? AND c.faculty_id = ?`)
-        .get(req.params.id, req.userId)
-      if (!current) return res.status(404).json({ message: 'Slide deck not found.' })
-      const { title, content, status, classId } = req.body || {}
-      const cleanTitle = typeof title === 'string' ? title.trim() : current.title
-      const nextContent = Array.isArray(content)
-        ? content
-        : safeJsonArray(current.content_json)
-      const currentPresentation = presentationForSlide(current)
-      if (currentPresentation?.fileId) {
-        if (!nextContent.length || !nextContent[0] || typeof nextContent[0] !== 'object') {
-          nextContent[0] = {}
-        }
-        nextContent[0].presentation = currentPresentation
-      }
-      const nextClassId = typeof classId === 'string' ? classId : current.class_id
-      const learningClass = ownerClass(nextClassId, req.userId)
-      if (!learningClass) return res.status(404).json({ message: 'Class not found.' })
-      if (cleanTitle.length < 2) {
-        return res.status(400).json({ message: 'Enter a slide deck title with at least 2 characters.' })
-      }
-      db.prepare(`
-        UPDATE slides SET class_id = ?, title = ?, content_json = ?, status = ?,
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE id = ? AND class_id IN (
-          SELECT id FROM classes WHERE faculty_id = ?
-        )
-      `).run(
-        learningClass.id,
-        cleanTitle,
-        JSON.stringify(nextContent),
-        status === 'Published' ? 'Published' : current.status,
-        current.id,
-        req.userId,
+      const database = await getDatabase()
+      const current = await database.collection('slides').findOne({ id: req.slide.id })
+      const body = req.body || {}
+      const title = typeof body.title === 'string' ? body.title.trim() : current.title
+      const description = typeof body.description === 'string' ? body.description : current.description
+      const status = ['Published', 'Draft'].includes(body.status) ? body.status : current.status
+      await database.collection('slides').updateOne(
+        { _id: current._id },
+        { $set: { title, description, status, updated_at: new Date().toISOString() } },
       )
-      const updated = db
-        .prepare(`${SLIDE_SELECT} WHERE s.id = ? AND c.faculty_id = ?`)
-        .get(current.id, req.userId)
-      return res.json({ slide: mapSlide(updated) })
+      const updated = await database.collection('slides').findOne({ id: req.slide.id })
+      const context = {
+        class_name: null,
+        subject_code: null,
+        faculty_id: null,
+      }
+      const classRecord = await database.collection('classes').findOne({ id: updated.class_id })
+      if (classRecord) {
+        context.class_name = classRecord.class_name
+        context.subject_code = classRecord.subject_code
+        context.faculty_id = classRecord.faculty_id
+      }
+      const slideRow = { ...updated }
+      delete slideRow._id
+      return res.json({ slide: mapSlide(slideRow, context) })
     } catch (error) {
       console.error('Update slide error:', error)
-      return res.status(500).json({ message: 'Could not update slides.' })
+      return res.status(500).json({ message: 'Could not update the slide.' })
     }
   },
 )
@@ -2080,48 +1853,49 @@ router.delete(
   '/slides/:id',
   requireAuth,
   requireRole('Faculty'),
-  (req, res) => {
+  requireSlideOwner('id'),
+  async (req, res) => {
     try {
-      const current = db
-        .prepare(`
-          SELECT s.content_json FROM slides s
-          JOIN classes c ON c.id = s.class_id
-          WHERE s.id = ? AND c.faculty_id = ?
-        `)
-        .get(req.params.id, req.userId)
-      if (!current) {
-        return res.status(404).json({ message: 'Slide deck not found.' })
+      const database = await getDatabase()
+      const deleted = await database.collection('slides').deleteOne({ id: req.slide.id })
+      if (deleted.deletedCount === 0) {
+        return res.status(404).json({ message: 'Slide not found.' })
       }
-      const result = db.prepare(`
-        DELETE FROM slides WHERE id = ?
-          AND class_id IN (SELECT id FROM classes WHERE faculty_id = ?)
-      `).run(req.params.id, req.userId)
-      if (!result.changes) {
-        return res.status(404).json({ message: 'Slide deck not found.' })
-      }
-      removePresentationFile(presentationForSlide(current))
-      return res.json({ message: 'Slide deck removed.' })
+      const slide = await database.collection('slides').findOne({ id: req.slide.id })
+      const presentations = safeJsonArray(slide.presentation_json)
+      const latestPresentation = presentations.length > 0 ? presentations[presentations.length - 1] : null
+      removePresentationFile(latestPresentation)
+      return res.json({ message: 'Slide deleted.' })
     } catch (error) {
       console.error('Delete slide error:', error)
-      return res.status(500).json({ message: 'Could not delete slides.' })
+      return res.status(500).json({ message: 'Could not delete the slide.' })
     }
   },
 )
 
-router.get('/activity', requireAuth, requireRole('Faculty', 'Student'), (req, res) => {
-  try {
-    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50)
-    const activity = db.prepare(`
-      SELECT a.* FROM activity_logs a
-      JOIN classes c ON c.id = a.class_id
-      WHERE ${scopeForRole(req.userRole)}
-      ORDER BY a.created_at DESC LIMIT ?
-    `).all(req.userId, limit)
-    return res.json({ activity: activity.map(mapActivity) })
-  } catch (error) {
-    console.error('Load activity error:', error)
-    return res.status(500).json({ message: 'Could not load recent updates.' })
-  }
-})
+router.get(
+  '/activity',
+  requireAuth,
+  requireRole('Faculty', 'Student'),
+  requireClassAccess('id'),
+  async (req, res) => {
+    try {
+      const database = await getDatabase()
+      const activities = await database
+        .collection('activities')
+        .find({ class_id: req.classId })
+        .toArray()
+      const rows = activities
+        .sort((a, b) => String(b.created_date || '').localeCompare(String(a.created_date || '')))
+        .map(mapActivity)
+      return res.json({ activities: rows })
+    } catch (error) {
+      console.error('Load activities error:', error)
+      return res.status(500).json({ message: 'Could not load activities.' })
+    }
+  },
+)
 
 module.exports = router
+
+

@@ -1,11 +1,11 @@
-const crypto = require('crypto')
+﻿const crypto = require('crypto')
 const express = require('express')
-const db = require('../config/database')
+const { getDatabase } = require('../config/database')
 const { requireAuth } = require('../middleware/authMiddleware')
 
 const router = express.Router()
 
-router.post('/', requireAuth, (req, res) => {
+router.post('/', requireAuth, async (req, res) => {
   const { subject, message, page } = req.body || {}
   const cleanSubject = typeof subject === 'string' ? subject.trim() : ''
   const cleanMessage = typeof message === 'string' ? message.trim() : ''
@@ -24,20 +24,24 @@ router.post('/', requireAuth, (req, res) => {
   }
 
   try {
-    const user = db
-      .prepare('SELECT id FROM users WHERE id = ?')
-      .get(req.userId)
+    const database = await getDatabase()
+    const user = await database.collection('users').findOne({ id: req.userId })
 
     if (!user) {
       return res.status(401).json({ message: 'Account not found.' })
     }
 
     const ticketId = crypto.randomUUID()
-
-    db.prepare(`
-      INSERT INTO support_tickets (id, user_id, subject, message, page)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(ticketId, req.userId, cleanSubject, cleanMessage, cleanPage)
+    await database.collection('support_tickets').insertOne({
+      _id: ticketId,
+      id: ticketId,
+      user_id: req.userId,
+      subject: cleanSubject,
+      message: cleanMessage,
+      page: cleanPage,
+      status: 'Open',
+      created_at: new Date().toISOString(),
+    })
 
     return res.status(201).json({
       message: 'Support request sent.',
@@ -45,9 +49,7 @@ router.post('/', requireAuth, (req, res) => {
     })
   } catch (error) {
     console.error('Support request error:', error)
-    return res
-      .status(500)
-      .json({ message: 'Could not send your message. Please try again.' })
+    return res.status(500).json({ message: 'Could not send your message. Please try again.' })
   }
 })
 

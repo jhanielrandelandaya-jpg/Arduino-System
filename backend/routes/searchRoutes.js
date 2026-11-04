@@ -1,94 +1,109 @@
-const express = require('express')
-const db = require('../config/database')
+﻿const express = require('express')
+const { getDatabase } = require('../config/database')
 const { requireAuth, requireRole } = require('../middleware/authMiddleware')
 
 const router = express.Router()
 
-const escapeLike = (value) => value.replace(/[\\%_]/g, '\\$&')
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-router.get('/', requireAuth, requireRole('Faculty', 'Student'), (req, res) => {
+router.get('/', requireAuth, requireRole('Faculty', 'Student'), async (req, res) => {
   const term = typeof req.query.q === 'string' ? req.query.q.trim() : ''
   if (term.length < 2) return res.json({ results: [] })
 
   try {
-    const pattern = `%${escapeLike(term)}%`
-    const classScope =
-      req.userRole === 'Faculty'
-        ? 'c.faculty_id = ?'
-        : `c.status = 'Published' AND EXISTS (
-            SELECT 1 FROM enrollments e
-            WHERE e.class_id = c.id AND e.student_id = ? AND e.status = 'Active'
-          )`
-    const quizzesScope =
-      req.userRole === 'Faculty'
-        ? 'c.faculty_id = ?'
-        : `c.status = 'Published' AND q.status = 'Published' AND EXISTS (
-            SELECT 1 FROM enrollments e
-            WHERE e.class_id = c.id AND e.student_id = ? AND e.status = 'Active'
-          )`
-    const classes = db.prepare(`
-      SELECT c.id, c.class_name, c.subject, c.subject_code, c.accent
-      FROM classes c
-      WHERE ${classScope}
-        AND (c.class_name LIKE ? ESCAPE '\\'
-          OR c.subject LIKE ? ESCAPE '\\'
-          OR c.subject_code LIKE ? ESCAPE '\\')
-      ORDER BY c.created_date DESC LIMIT 5
-    `).all(req.userId, pattern, pattern, pattern)
-    const quizzes = db.prepare(`
-      SELECT q.id, q.quiz_title, q.subject_code, q.status
-      FROM quizzes q
-      JOIN classes c ON c.id = q.class_id
-      WHERE ${quizzesScope}
-        AND (q.quiz_title LIKE ? ESCAPE '\\'
-          OR q.subject_code LIKE ? ESCAPE '\\')
-      ORDER BY q.created_date DESC LIMIT 5
-    `).all(req.userId, pattern, pattern)
+    const database = await getDatabase()
+    const pattern = new RegExp(escapeRegex(term), 'i')
+
+    const classes = await database.collection('classes').find({}).toArray()
+    const classResults = []
+    for (const cls of classes) {
+      if (
+        req.userRole === 'Student' &&
+        cls.status !== 'Published'
+      ) {
+        continue
+      }
+      const matches =
+        pattern.test(cls.class_name || '') ||
+        pattern.test(cls.subject || '') ||
+        pattern.test(cls.subject_code || '')
+      if (!matches) continue
+      classResults.push({
+        type: 'class',
+        id: cls.id,
+        title: cls.class_name,
+        subtitle: `${cls.subject_code} · ${cls.subject}`,
+        icon: 'book',
+        tone: cls.accent || 'blue',
+        path: `${req.userRole === 'Faculty' ? '/faculty' : '/student'}/subjects`,
+        query: cls.class_name,
+      })
+    }
+
+    const quizzes = await database.collection('quizzes').find({}).toArray()
+    const quizResults = []
+    for (const quiz of quizzes) {
+      const cls = await database
+        .collection('classes')
+        .findOne({ id: quiz.class_id })
+      if (!cls) continue
+      const matches = pattern.test(quiz.quiz_title || '') || pattern.test(quiz.subject_code || '')
+      if (!matches) continue
+      if (
+        req.userRole === 'Student' &&
+        (cls.status !== 'Published' || quiz.status !== 'Published')
+      ) {
+        continue
+      }
+      if (req.userRole === 'Faculty' && cls.faculty_id !== req.userId) {
+        continue
+      }
+      quizResults.push({
+        type: 'quiz',
+        id: quiz.id,
+        title: quiz.quiz_title,
+        subtitle: `${quiz.subject_code || 'Quiz'} · ${quiz.status}`,
+        icon: 'quiz',
+        tone: 'violet',
+        path: `${req.userRole === 'Faculty' ? '/faculty' : '/student'}/quizzes`,
+        query: quiz.quiz_title,
+      })
+    }
 
     const base = req.userRole === 'Faculty' ? '/faculty' : '/student'
     const results = [
-      ...classes.map((item) => ({
-        type: 'class',
-        id: item.id,
-        title: item.class_name,
-        subtitle: `${item.subject_code} · ${item.subject}`,
-        icon: 'book',
-        tone: item.accent || 'blue',
-        path: `${base}/subjects`,
-        query: item.class_name,
-      })),
-      ...quizzes.map((item) => ({
-        type: 'quiz',
-        id: item.id,
-        title: item.quiz_title,
-        subtitle: `${item.subject_code || 'Quiz'} · ${item.status}`,
-        icon: 'quiz',
-        tone: 'violet',
-        path: `${base}/quizzes`,
-        query: item.quiz_title,
-      })),
+      ...classResults.map((item) => ({ ...item, path: item.path || `${base}/subjects` })),
+      ...quizResults.map((item) => ({ ...item, path: item.path || `${base}/quizzes` })),
     ]
 
     if (req.userRole === 'Faculty') {
-      const students = db.prepare(`
-        SELECT DISTINCT u.id, u.full_name, u.username
-        FROM users u
-        JOIN enrollments e ON e.student_id = u.id AND e.status = 'Active'
-        JOIN classes c ON c.id = e.class_id
-        WHERE u.role = 'Student' AND c.faculty_id = ?
-          AND (u.full_name LIKE ? ESCAPE '\\' OR u.username LIKE ? ESCAPE '\\')
-        ORDER BY u.full_name ASC LIMIT 5
-      `).all(req.userId, pattern, pattern)
-      results.push(...students.map((item) => ({
-        type: 'student',
-        id: item.id,
-        title: item.full_name,
-        subtitle: `@${item.username} · Student`,
-        icon: 'users',
-        tone: 'amber',
-        path: '/faculty/performance',
-        query: item.full_name,
-      })))
+      const enrollments = await database
+        .collection('enrollments')
+        .find({ status: 'Active' })
+        .toArray()
+      const studentResults = []
+      for (const enrollment of enrollments) {
+        const student = await database
+          .collection('users')
+          .findOne({ id: enrollment.student_id })
+        if (!student || student.role !== 'Student') continue
+        const ownedClass = await database
+          .collection('classes')
+          .findOne({ id: enrollment.class_id })
+        if (!ownedClass || ownedClass.faculty_id !== req.userId) continue
+        if (!pattern.test(student.full_name || '') && !pattern.test(student.username || '')) continue
+        studentResults.push({
+          type: 'student',
+          id: student.id,
+          title: student.full_name,
+          subtitle: `@${student.username} · Student`,
+          icon: 'users',
+          tone: 'amber',
+          path: '/faculty/performance',
+          query: student.full_name,
+        })
+      }
+      results.push(...studentResults)
     }
 
     return res.json({ results })

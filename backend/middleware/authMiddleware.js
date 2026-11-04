@@ -1,5 +1,5 @@
-const jwt = require('jsonwebtoken')
-const db = require('../config/database')
+﻿const jwt = require('jsonwebtoken')
+const { getDatabase } = require('../config/database')
 const { jwtSecret } = require('../config/auth')
 
 const requireAuth = (req, res, next) => {
@@ -21,11 +21,10 @@ const requireAuth = (req, res, next) => {
   }
 }
 
-const requireRole = (...allowedRoles) => (req, res, next) => {
+const requireRole = (...allowedRoles) => async (req, res, next) => {
   try {
-    const user = db
-      .prepare('SELECT role FROM users WHERE id = ?')
-      .get(req.userId)
+    const database = await getDatabase()
+    const user = await database.collection('users').findOne({ id: req.userId })
 
     if (!user) {
       return res.status(401).json({ message: 'Account not found.' })
@@ -33,7 +32,7 @@ const requireRole = (...allowedRoles) => (req, res, next) => {
 
     if (!allowedRoles.includes(user.role)) {
       return res.status(403).json({
-        message: 'You do not have permission to perform this action.',
+        message: 'You do not have the permission to perform this action.',
       })
     }
 
@@ -41,9 +40,7 @@ const requireRole = (...allowedRoles) => (req, res, next) => {
     return next()
   } catch (error) {
     console.error('Role check error:', error)
-    return res.status(500).json({
-      message: 'Could not verify your permissions. Please try again.',
-    })
+    return res.status(500).json({ message: 'Could not verify your permissions. Please try again.' })
   }
 }
 

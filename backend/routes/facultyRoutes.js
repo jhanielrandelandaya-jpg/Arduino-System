@@ -1,18 +1,8 @@
-const express = require('express')
-const db = require('../config/database')
+﻿const express = require('express')
+const { getDatabase } = require('../config/database')
 const { requireAuth, requireRole } = require('../middleware/authMiddleware')
 const { requireClassOwner } = require('../middleware/classAccessMiddleware')
-const {
-  CLASS_SELECT,
-  QUIZ_SELECT,
-  SLIDE_SELECT,
-  CLASSWORK_SELECT,
-  mapClass,
-  mapQuiz,
-  mapSlide,
-  mapClasswork,
-  mapActivity,
-} = require('../utils/learningData')
+const { mapClass, mapQuiz, mapSlide, mapClasswork, mapActivity } = require('../utils/learningData')
 
 const router = express.Router()
 
@@ -20,60 +10,149 @@ router.get('/overview', requireAuth, requireRole('Faculty'), (req, res) => {
   res.json({ message: 'Faculty access granted.', role: req.userRole })
 })
 
-router.get('/dashboard', requireAuth, requireRole('Faculty'), (req, res) => {
+router.get('/dashboard', requireAuth, requireRole('Faculty'), async (req, res) => {
   try {
-    const classes = db
-      .prepare(`${CLASS_SELECT} WHERE c.faculty_id = ? ORDER BY c.created_date ASC`)
-      .all(req.userId)
-    const quizzes = db
-      .prepare(`${QUIZ_SELECT} WHERE c.faculty_id = ? ORDER BY q.created_date DESC`)
-      .all(req.userId)
-    const slides = db
-      .prepare(`${SLIDE_SELECT} WHERE c.faculty_id = ? ORDER BY s.created_date ASC`)
-      .all(req.userId)
-    const classwork = db.prepare(`
-      ${CLASSWORK_SELECT}
-      WHERE c.faculty_id = ?
-      ORDER BY w.due_at IS NULL, w.due_at, w.created_at DESC
-    `).all(req.userId)
-    const enrolledRows = db.prepare(`
-      SELECT u.id, u.full_name, u.username, c.id AS class_id,
-        c.class_name, c.subject_code
-      FROM users u
-      JOIN enrollments e ON e.student_id = u.id AND e.status = 'Active'
-      JOIN classes c ON c.id = e.class_id
-      WHERE u.role = 'Student' AND c.faculty_id = ?
-      ORDER BY u.full_name, c.class_name
-    `).all(req.userId)
+    const database = await getDatabase()
+    const classes = await database
+      .collection('classes')
+      .find({ faculty_id: req.userId })
+      .sort({ created_date: 1 })
+      .toArray()
+    const classIds = classes.map((cls) => cls.id)
+
+    const enrollments = await database
+      .collection('enrollments')
+      .find({ status: 'Active' })
+      .toArray()
+    const studentsByClass = new Map()
+    for (const enrollment of enrollments) {
+      const list = studentsByClass.get(enrollment.class_id) || []
+      list.push(enrollment.student_id)
+      studentsByClass.set(enrollment.class_id, list)
+    }
+
+    const slides = await database
+      .collection('slides')
+      .find({ class_id: { $in: classIds } })
+      .toArray()
+    const quizzes = await database
+      .collection('quizzes')
+      .find({ class_id: { $in: classIds } })
+      .toArray()
+    const classworkDocs = await database
+      .collection('classwork')
+      .find({ class_id: { $in: classIds }, status: 'Published' })
+      .toArray()
+    const attempts = await database
+      .collection('quiz_attempts')
+      .find({ quiz_id: { $in: quizzes.map((quiz) => quiz.id) } })
+      .toArray()
+
+    const teachers = await database
+      .collection('users')
+      .find({ id: { $in: classes.map((cls) => cls.faculty_id) } })
+      .toArray()
+    const teacherNames = new Map(
+      teachers.map((teacher) => [teacher.id, teacher.full_name]),
+    )
+
+    const classRows = classes.map((cls) => {
+      const classAttempts = attempts.filter(
+        (attempt) =>
+          quizzes.some(
+            (quiz) => quiz.id === attempt.quiz_id && quiz.class_id === cls.id,
+          ),
+      )
+      const average = classAttempts.length
+        ? Math.round(
+            classAttempts.reduce((sum, attempt) => sum + (attempt.score || 0), 0) /
+              classAttempts.length,
+          )
+        : null
+      return {
+        ...cls,
+        teacher_name: teacherNames.get(cls.faculty_id) || '',
+        students: (studentsByClass.get(cls.id) || []).length,
+        lessons: slides.filter((slide) => slide.class_id === cls.id).length,
+        quizzes: quizzes.filter((quiz) => quiz.class_id === cls.id).length,
+        classwork: classworkDocs.filter((work) => work.class_id === cls.id).length,
+        average,
+      }
+    })
+
+    const quizRows = quizzes.map((quiz) => {
+      const classRecord = classes.find((cls) => cls.id === quiz.class_id)
+      return {
+        ...quiz,
+        class_name: classRecord && classRecord.class_name,
+        faculty_id: classRecord && classRecord.faculty_id,
+        teacher_name: classRecord && teacherNames.get(classRecord.faculty_id),
+      }
+    })
+
+    const slideRows = slides.map((slide) => {
+      const classRecord = classes.find((cls) => cls.id === slide.class_id)
+      return {
+        ...slide,
+        class_name: classRecord && classRecord.class_name,
+        subject_code: classRecord && classRecord.subject_code,
+        faculty_id: classRecord && classRecord.faculty_id,
+      }
+    })
+
+    const classworkRows = classworkDocs.map((work) => {
+      const classRecord = classes.find((cls) => cls.id === work.class_id)
+      return {
+        ...work,
+        class_name: classRecord && classRecord.class_name,
+        subject_code: classRecord && classRecord.subject_code,
+        faculty_id: classRecord && classRecord.faculty_id,
+      }
+    })
+
+    const enrolledRows = await database
+      .collection('enrollments')
+      .find({ class_id: { $in: classIds }, status: 'Active' })
+      .toArray()
     const studentsById = new Map()
-    enrolledRows.forEach((row) => {
-      if (!studentsById.has(row.id)) {
-        studentsById.set(row.id, {
-          id: row.id,
-          name: row.full_name,
-          username: row.username,
+    for (const row of enrolledRows) {
+      const student = await database
+        .collection('users')
+        .findOne({ id: row.student_id })
+      if (!student) continue
+      if (!studentsById.has(student.id)) {
+        studentsById.set(student.id, {
+          id: student.id,
+          name: student.full_name,
+          username: student.username,
           classIds: [],
           classNames: [],
           subjectCodes: [],
         })
       }
-      const student = studentsById.get(row.id)
-      student.classIds.push(row.class_id)
-      student.classNames.push(row.class_name)
-      student.subjectCodes.push(row.subject_code)
-    })
-    const activity = db.prepare(`
-      SELECT a.* FROM activity_logs a
-      JOIN classes c ON c.id = a.class_id
-      WHERE c.faculty_id = ?
-      ORDER BY a.created_at DESC LIMIT 20
-    `).all(req.userId)
+      const studentEntry = studentsById.get(student.id)
+      studentEntry.classIds.push(row.class_id)
+      const classRecord = classes.find((cls) => cls.id === row.class_id)
+      studentEntry.classNames.push(
+        classRecord && classRecord.class_name ? classRecord.class_name : '',
+      )
+      studentEntry.subjectCodes.push(
+        classRecord && classRecord.subject_code ? classRecord.subject_code : '',
+      )
+    }
+
+    const activity = await database
+      .collection('activity_logs')
+      .find({ class_id: { $in: classIds } })
+      .sort({ created_at: -1 })
+      .limit(20)
+      .toArray()
 
     return res.json({
-      classes: classes.map(mapClass),
-      quizzes: quizzes.map(mapQuiz),
-      slides: slides.map(mapSlide),
-      classwork: classwork.map(mapClasswork),
+      classes: classRows.map(mapClass),
+      quizzes: quizRows.map((quiz) => mapQuiz(quiz, { includeAnswers: true })),
+      slides: slideRows.map(mapSlide),
+      classwork: classworkRows.map(mapClasswork),
       students: [...studentsById.values()],
       activity: activity.map(mapActivity),
       syncedAt: new Date().toISOString(),
@@ -89,16 +168,31 @@ router.get(
   requireAuth,
   requireRole('Faculty'),
   requireClassOwner('id'),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const students = db.prepare(`
-        SELECT u.id, u.full_name AS name, u.username, e.enrolled_at AS enrolledAt
-        FROM enrollments e
-        JOIN users u ON u.id = e.student_id
-        WHERE e.class_id = ? AND e.status = 'Active' AND u.role = 'Student'
-        ORDER BY u.full_name
-      `).all(req.classId)
-      return res.json({ students })
+      const database = await getDatabase()
+      const enrollments = await database
+        .collection('enrollments')
+        .find({
+          class_id: req.classId,
+          status: 'Active',
+        })
+        .toArray()
+      const studentRows = []
+      for (const enrollment of enrollments) {
+        const student = await database
+          .collection('users')
+          .findOne({ id: enrollment.student_id })
+        if (!student || student.role !== 'Student') continue
+        studentRows.push({
+          id: student.id,
+          name: student.full_name,
+          username: student.username,
+          enrolledAt: enrollment.enrolled_at,
+        })
+      }
+      studentRows.sort((a, b) => a.name.localeCompare(b.name))
+      return res.json({ students: studentRows })
     } catch (error) {
       console.error('Load class students error:', error)
       return res.status(500).json({ message: 'Could not load class students.' })
@@ -111,24 +205,53 @@ router.get(
   requireAuth,
   requireRole('Faculty'),
   requireClassOwner('id'),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const attempts = db.prepare(`
-        SELECT qa.id, qa.quiz_id AS quizId, qa.student_id AS studentId,
-          qa.score, qa.passed, qa.correct_count AS correctCount,
-          qa.question_count AS questionCount, qa.submitted_at AS submittedAt,
-          q.quiz_title AS quizTitle, q.passing, u.full_name AS studentName,
-          u.username, c.class_name AS className
-        FROM quiz_attempts qa
-        JOIN quizzes q ON q.id = qa.quiz_id
-        JOIN classes c ON c.id = q.class_id
-        JOIN users u ON u.id = qa.student_id AND u.role = 'Student'
-        JOIN enrollments e ON e.student_id = qa.student_id
-          AND e.class_id = c.id AND e.status = 'Active'
-        WHERE c.id = ? AND c.faculty_id = ?
-        ORDER BY qa.submitted_at DESC
-      `).all(req.classId, req.userId)
-      return res.json({ attempts })
+      const database = await getDatabase()
+      const quizzes = await database
+        .collection('quizzes')
+        .find({ class_id: req.classId })
+        .toArray()
+      const attempts = await database
+        .collection('quiz_attempts')
+        .find({ quiz_id: { $in: quizzes.map((quiz) => quiz.id) } })
+        .toArray()
+      const rows = []
+      for (const attempt of attempts) {
+        const quiz = quizzes.find((item) => item.id === attempt.quiz_id)
+        if (!quiz) continue
+        const student = await database
+          .collection('users')
+          .findOne({ id: attempt.student_id })
+        const enrollment = await database
+          .collection('enrollments')
+          .findOne({
+            class_id: quiz.class_id,
+            student_id: attempt.student_id,
+            status: 'Active',
+          })
+        if (!student || !enrollment) continue
+        const classRecord = await database
+          .collection('classes')
+          .findOne({ id: quiz.class_id })
+        rows.push({
+          id: attempt.id,
+          quizId: attempt.quiz_id,
+          studentId: attempt.student_id,
+          score: attempt.score,
+          passed: attempt.passed,
+          correctCount: attempt.correct_count,
+          questionCount: attempt.question_count,
+          submittedAt: attempt.submitted_at,
+          quizTitle: quiz.quiz_title,
+          passing: quiz.passing,
+          studentName: student.full_name,
+          username: student.username,
+          className: classRecord && classRecord.class_name,
+        })
+      }
+      rows.sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)))
+      return res.json({ attempts: rows })
     } catch (error) {
       console.error('Load class quiz attempts error:', error)
       return res.status(500).json({ message: 'Could not load quiz scores.' })
