@@ -571,7 +571,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
   const uploadSlideFile = useCallback(
     async (slideId, file) => {
       const formData = new FormData()
-      formData.append('presentation', file)
+      formData.append('file', file)
       const response = await fetch(
         apiUrl(`/api/learning/slides/${encodeURIComponent(slideId)}/presentation`),
         {
