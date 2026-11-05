@@ -45,6 +45,17 @@ export default function BrandingPanel() {
             for learning, teaching, and measurable progress.
           </p>
 
+          <div className="brand-metrics">
+            <div className="metric-chip">
+              <strong>3.2K</strong>
+              <span>active learners</span>
+            </div>
+            <div className="metric-chip">
+              <strong>99.9%</strong>
+              <span>secure access</span>
+            </div>
+          </div>
+
           <div className="feature-grid">
             {FEATURES.map((feature) => (
               <div key={feature.title} className="feature-card">

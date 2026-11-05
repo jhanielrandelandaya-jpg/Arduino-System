@@ -31,6 +31,359 @@
   --sidebar-end: #ffffff;
 }
 
+.lms-role-faculty .lms-sidebar {
+  background:
+    radial-gradient(circle at top right, rgb(168 85 247 / 24%), transparent 30%),
+    linear-gradient(180deg, #1a1435 0%, #231b46 34%, #2c1f52 100%);
+  border-right: 1px solid rgba(196, 181, 253, 0.18);
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.04);
+}
+
+.lms-role-faculty .lms-brand-mark {
+  color: #2a1d52;
+  background: linear-gradient(145deg, #ffffff 0%, #e9defd 100%);
+  box-shadow: 0 10px 24px rgba(124, 58, 237, 0.2);
+}
+
+.lms-role-faculty .lms-brand-copy strong {
+  color: #f9f5ff;
+}
+
+.lms-role-faculty .lms-brand-copy small {
+  color: #c4b5fd;
+}
+
+.lms-role-faculty .lms-role-card {
+  border-color: rgba(196, 181, 253, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.lms-role-faculty .lms-role-icon {
+  background: rgba(168, 85, 247, 0.2);
+  color: #f3e8ff;
+}
+
+.lms-role-faculty .lms-role-card span {
+  color: #cabdff;
+}
+
+.lms-role-faculty .lms-role-card strong {
+  color: #f9f5ff;
+}
+
+.lms-role-faculty .lms-nav-label {
+  color: #c4b5fd;
+}
+
+.lms-role-faculty .lms-nav-link {
+  color: #ddd6fe;
+  border: 1px solid transparent;
+}
+
+.lms-role-faculty .lms-nav-link:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(196, 181, 253, 0.12);
+}
+
+.lms-role-faculty .lms-nav-link.is-active {
+  color: #ffffff;
+  background: linear-gradient(90deg, rgba(168, 85, 247, 0.28), rgba(99, 102, 241, 0.18));
+  border-color: rgba(196, 181, 253, 0.18);
+  box-shadow: inset 3px 0 0 #c4b5fd;
+}
+
+.lms-role-faculty .lms-sidebar-user {
+  border-top-color: rgba(196, 181, 253, 0.14);
+}
+
+.lms-role-faculty .lms-sidebar-user-copy strong {
+  color: #f9f5ff;
+}
+
+.lms-role-faculty .lms-sidebar-user-copy span {
+  color: #c9bdfd;
+}
+
+.lms-role-faculty .lms-sidebar-logout {
+  color: #d8ccff;
+}
+
+.lms-role-faculty .lms-sidebar-logout:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.lms-role-faculty .lms-topbar {
+  background: rgba(255, 255, 255, 0.82);
+  border-bottom-color: rgba(196, 181, 253, 0.2);
+  backdrop-filter: blur(16px);
+}
+
+.lms-role-faculty .lms-faculty-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.lms-role-faculty .lms-faculty-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.lms-role-faculty .lms-faculty-kpi {
+  padding: 20px 18px;
+  border: 1px solid rgba(196, 181, 253, 0.28);
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #faf7ff 100%);
+  box-shadow: 0 12px 28px rgba(124, 58, 237, 0.08);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.lms-role-faculty .lms-faculty-kpi:hover {
+  transform: translateY(-2px);
+  border-color: rgba(124, 58, 237, 0.3);
+  box-shadow: 0 18px 32px rgba(124, 58, 237, 0.12);
+}
+
+.lms-role-faculty .lms-faculty-kpi-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: rgba(124, 58, 237, 0.1);
+  color: #6d28d9;
+  box-shadow: inset 0 0 0 1px rgba(124, 58, 237, 0.08);
+}
+
+.lms-role-faculty .lms-faculty-kpi-label {
+  color: #5f627b;
+  font-weight: 700;
+}
+
+.lms-role-faculty .lms-faculty-kpi strong {
+  color: #120f26;
+  font-size: 30px;
+}
+
+.lms-role-faculty .lms-faculty-kpi-meta {
+  color: #6f7391;
+}
+
+.lms-role-faculty .lms-faculty-mini-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.lms-role-faculty .lms-faculty-mini {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 18px;
+  border: 1px solid rgba(196, 181, 253, 0.26);
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, rgba(255, 255, 255, 0.96) 100%);
+  box-shadow: 0 10px 24px rgba(124, 58, 237, 0.05);
+}
+
+.lms-role-faculty .lms-faculty-mini > div {
+  min-width: 0;
+}
+
+.lms-role-faculty .lms-faculty-mini span {
+  color: #666b84;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.lms-role-faculty .lms-faculty-mini strong {
+  display: block;
+  margin-top: 6px;
+  color: #1b1833;
+  font-size: 30px;
+}
+
+.lms-role-faculty .lms-faculty-mini p {
+  margin: 6px 0 0;
+  color: #676e8d;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.lms-role-faculty .lms-faculty-mini-icon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  place-items: center;
+  border-radius: 14px;
+  background: rgba(124, 58, 237, 0.1);
+  color: #6d28d9;
+}
+
+.lms-role-faculty .lms-faculty-grid {
+  gap: 18px;
+}
+
+.lms-role-faculty .lms-faculty-panel {
+  border: 1px solid rgba(196, 181, 253, 0.22);
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #faf8ff 100%);
+  box-shadow: 0 14px 30px rgba(124, 58, 237, 0.05);
+}
+
+.lms-role-faculty .lms-faculty-panel .lms-section-head h2 {
+  color: #1b1833;
+}
+
+.lms-role-faculty .lms-faculty-panel .lms-table th,
+.lms-role-faculty .lms-faculty-panel .lms-table td {
+  border-bottom-color: rgba(196, 181, 253, 0.18);
+}
+
+.lms-role-faculty .lms-faculty-panel .lms-table tbody tr:hover td {
+  background: rgba(124, 58, 237, 0.02);
+}
+
+.lms-role-faculty .lms-table-wrap {
+  overflow: hidden;
+  border: 1px solid rgba(196, 181, 253, 0.2);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 12px 28px rgba(124, 58, 237, 0.04);
+}
+
+.lms-role-faculty .lms-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: transparent;
+}
+
+.lms-role-faculty .lms-table th {
+  padding: 15px 16px;
+  color: #7a7b8d;
+  background: rgba(244, 240, 255, 0.8);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.lms-role-faculty .lms-table td {
+  padding: 16px;
+  color: #303a4d;
+  background: rgba(255, 255, 255, 0.4);
+  border-top: 1px solid rgba(196, 181, 253, 0.18);
+  vertical-align: middle;
+}
+
+.lms-role-faculty .lms-table tbody tr:hover td {
+  background: rgba(124, 58, 237, 0.02);
+}
+
+.lms-role-faculty .lms-table-user {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.lms-role-faculty .lms-table-user div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lms-role-faculty .lms-table-user strong {
+  color: #1d2333;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.lms-role-faculty .lms-table-user span {
+  color: #757d95;
+  font-size: 11px;
+}
+
+.lms-role-faculty .lms-table-user .lms-link {
+  align-self: flex-start;
+}
+
+.lms-role-faculty .lms-table-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.lms-role-faculty .lms-score {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #1c1d2b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lms-role-faculty .lms-score-bar {
+  display: inline-block;
+  width: 90px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #efe9ff;
+}
+
+.lms-role-faculty .lms-score-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.lms-role-faculty .lms-filter-input {
+  min-width: 280px;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid rgba(196, 181, 253, 0.3);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.02);
+}
+
+.lms-role-faculty .lms-toolbar {
+  margin-bottom: 18px;
+}
+
+.lms-role-faculty .lms-btn-primary {
+  background: linear-gradient(135deg, #7c3aed 0%, #8b5cf6 100%);
+  box-shadow: 0 10px 20px rgba(124, 58, 237, 0.18);
+}
+
+.lms-role-faculty .lms-btn-primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #6d28d9 0%, #7c3aed 100%);
+}
+
+.lms-role-faculty .lms-page-head {
+  margin-bottom: 18px;
+}
+
+.lms-role-faculty .lms-page-eyebrow {
+  color: #7c3aed;
+}
+
+.lms-role-faculty .lms-page-title {
+  color: #1a1730;
+}
+
+.lms-role-faculty .lms-page-description {
+  color: #5d677c;
+}
+
 .lms-shell *,
 .lms-shell *::before,
 .lms-shell *::after {
