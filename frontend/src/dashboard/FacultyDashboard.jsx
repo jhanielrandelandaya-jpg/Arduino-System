@@ -1540,11 +1540,13 @@ function LessonFormModal({
     status: lesson.status || 'Draft',
   })
 
+  const selectedSubjectId = form.subjectId || subjects[0]?.id || ''
+
   const update = (field, value) =>
     setForm((current) => ({ ...current, [field]: value }))
 
   const selectedSubject = subjects.find(
-    (subject) => subject.id === form.subjectId,
+    (subject) => subject.id === selectedSubjectId,
   )
 
   const generateSummary = async () => {
@@ -1552,7 +1554,7 @@ function LessonFormModal({
     setSummaryError('')
     try {
       const summary = await onGenerateSummary(
-        form.subjectId,
+        selectedSubjectId,
         form.title,
         form.content,
       )
@@ -1566,6 +1568,10 @@ function LessonFormModal({
 
   const handleSubmit = async (event) => {
     event.preventDefault()
+    if (!selectedSubjectId) {
+      setSaveError('Choose a class for this lesson.')
+      return
+    }
     setSaving(true)
     setSaveError('')
     try {
@@ -1573,6 +1579,7 @@ function LessonFormModal({
         ...lesson,
         id: lesson.id || persistedLessonId || `lesson-${Date.now()}`,
         ...form,
+        subjectId: selectedSubjectId,
         subjectCode: selectedSubject?.code || lesson.subjectCode || '',
         type: form.presentationFile || form.presentation
           ? 'Presentation + text'
@@ -1637,9 +1644,15 @@ function LessonFormModal({
         </Field>
         <Field label="Subject">
           <select
-            value={form.subjectId}
+            value={selectedSubjectId}
+            required
             onChange={(event) => update('subjectId', event.target.value)}
           >
+            {!selectedSubjectId && (
+              <option value="" disabled>
+                Select a class
+              </option>
+            )}
             {subjects.map((subject) => (
               <option value={subject.id} key={subject.id}>
                 {subject.code} · {subject.name}
@@ -1699,7 +1712,7 @@ function LessonFormModal({
             disabled={
               generatingSummary ||
               !summaryConsent ||
-              !form.subjectId ||
+              !selectedSubjectId ||
               !form.content.trim()
             }
           >
