@@ -7311,6 +7311,15 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 
+.lms-role-faculty .lms-sidebar .lms-brand-copy strong {
+  color: #38205f;
+  text-shadow: none;
+}
+
+.lms-role-faculty .lms-sidebar .lms-brand-copy small {
+  color: #6b548f;
+}
+
 .lms-role-faculty .lms-role-card {
   border-color: #e7ddfa;
   background: linear-gradient(115deg, #f8f3ff 0%, #f0ebff 100%);
