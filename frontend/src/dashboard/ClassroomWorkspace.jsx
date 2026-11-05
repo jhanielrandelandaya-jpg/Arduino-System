@@ -119,6 +119,48 @@ export default function ClassroomWorkspace({
   }, [getAnnouncements, learningClass.id])
 
   useEffect(() => {
+    if (role !== 'Student') return undefined
+    let active = true
+    const refreshAnnouncements = () => {
+      getAnnouncements(learningClass.id)
+        .then((items) => {
+          if (active) {
+            setAnnouncementsResult({
+              classId: learningClass.id,
+              items,
+              error: '',
+            })
+          }
+        })
+        .catch((error) => {
+          if (active) {
+            setAnnouncementsResult((current) => ({
+              classId: learningClass.id,
+              items:
+                current?.classId === learningClass.id ? current.items : [],
+              error: error.message,
+            }))
+          }
+        })
+    }
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') refreshAnnouncements()
+    }, 5000)
+    const handleFocus = () => refreshAnnouncements()
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refreshAnnouncements()
+    }
+    window.addEventListener('focus', handleFocus)
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      active = false
+      window.clearInterval(interval)
+      window.removeEventListener('focus', handleFocus)
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
+  }, [getAnnouncements, learningClass.id, role])
+
+  useEffect(() => {
     if (activeTab !== 'People') return
     let active = true
     const request = getPeople
@@ -171,6 +213,40 @@ export default function ClassroomWorkspace({
       active = false
     }
   }, [activeTab, getClasswork, learningClass.id])
+
+  useEffect(() => {
+    if (role !== 'Student' || activeTab !== 'Classwork' || !getClasswork) {
+      return undefined
+    }
+    let active = true
+    const refreshClasswork = () => {
+      getClasswork(learningClass.id)
+        .then((items) => {
+          if (active) {
+            setClassworkResult({ classId: learningClass.id, items })
+            setClassworkError('')
+          }
+        })
+        .catch((error) => {
+          if (active) setClassworkError(error.message)
+        })
+    }
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') refreshClasswork()
+    }, 5000)
+    const handleFocus = () => refreshClasswork()
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refreshClasswork()
+    }
+    window.addEventListener('focus', handleFocus)
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      active = false
+      window.clearInterval(interval)
+      window.removeEventListener('focus', handleFocus)
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
+  }, [activeTab, getClasswork, learningClass.id, role])
 
   useEffect(() => {
     const interval = window.setInterval(() => setCurrentTime(Date.now()), 60000)

@@ -387,9 +387,17 @@ function StudentJoinClassForm({ onEnroll }) {
 
   return (
     <form className="lms-toolbar lms-student-join-form" onSubmit={joinClass}>
+      <div className="lms-student-join-intro">
+        <span className="lms-student-join-icon">
+          <Icon name="plus" size={17} />
+        </span>
+        <div>
+          <strong>Join a class</strong>
+          <span>Enter the invitation code shared by your faculty.</span>
+        </div>
+      </div>
       <Field
-        label="Join a class with a code"
-        hint="Enter the join code shared by your faculty."
+        label="Class code"
         className="lms-student-join-field"
       >
         <input
@@ -399,7 +407,10 @@ function StudentJoinClassForm({ onEnroll }) {
             setClassCode(event.target.value)
             setError('')
           }}
-          placeholder="Enter class code"
+          placeholder="e.g. CS101-AB12"
+          autoComplete="off"
+          spellCheck="false"
+          maxLength={32}
           aria-invalid={Boolean(error)}
           aria-describedby={error ? 'student-join-error' : undefined}
           disabled={joining}
@@ -1120,11 +1131,11 @@ function StudentSubjects({
       <PageHeader
         eyebrow="My classes"
         title="Your enrolled classes"
-        description="Classes created by your teachers appear here automatically, with the latest subject details and schedules."
+        description="Your courses, learning materials, and assessments—all in one place."
         actions={
           <Link to="/student/lessons" className="lms-btn lms-btn-secondary">
             <Icon name="presentation" size={16} />
-            Open lessons
+            Browse lessons
           </Link>
         }
       />
@@ -1145,7 +1156,7 @@ function StudentSubjects({
         </div>
       )}
 
-      <div className="lms-toolbar">
+      <div className="lms-toolbar lms-student-subject-toolbar">
         <label className="lms-filter-input">
           <Icon name="search" size={15} />
           <input
@@ -1198,6 +1209,17 @@ function StudentSubjects({
                 >
                   Try again
                 </button>
+              ) : classes.length > 0 ? (
+                <button
+                  type="button"
+                  className="lms-btn lms-btn-secondary"
+                  onClick={() => {
+                    setSearch('')
+                    setSemester('All')
+                  }}
+                >
+                  Clear filters
+                </button>
               ) : null
             }
           />
@@ -1244,20 +1266,20 @@ function StudentSubjects({
                 <span>
                   {subject.lessons} lessons · {subject.quizzes} quizzes
                 </span>
-                <span>Added {formatDate(subject.createdDate)}</span>
+                <span>{formatDate(subject.createdDate)}</span>
               </div>
-              <div className="lms-subject-card-stats">
+              <div className="lms-subject-card-actions">
                 <Link
                   to={`/student/subjects?classId=${encodeURIComponent(subject.id)}`}
-                  className="lms-link"
+                  className="lms-btn lms-btn-primary lms-btn-sm"
                 >
-                  Open classroom <Icon name="arrowRight" size={12} />
+                  Open classroom <Icon name="arrowRight" size={13} />
                 </Link>
                 <Link
                   to={`/student/lessons?classId=${encodeURIComponent(subject.id)}`}
                   className="lms-link"
                 >
-                  Open lessons <Icon name="arrowRight" size={12} />
+                  Lessons <Icon name="arrowRight" size={12} />
                 </Link>
                 <button
                   type="button"
@@ -1271,8 +1293,12 @@ function StudentSubjects({
                 >
                   {expandedClassId === subject.id
                     ? 'Hide quizzes'
-                    : `Quizzes (${quizzes.filter((quiz) => quiz.classId === subject.id).length})`}
-                  <Icon name="chevronDown" size={12} />
+                    : `Quizzes · ${quizzes.filter((quiz) => quiz.classId === subject.id).length}`}
+                  <Icon
+                    name="chevronDown"
+                    size={12}
+                    className={expandedClassId === subject.id ? 'is-rotated' : ''}
+                  />
                 </button>
               </div>
               {expandedClassId === subject.id && (
