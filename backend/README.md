@@ -1,5 +1,16 @@
 # Backend
 
+## Database
+
+The backend stores application records in MongoDB. Configure the connection
+with `MONGODB_URI` and the database name with `MONGODB_DB`; they default to
+`mongodb://127.0.0.1:27017` and `learnspace`, respectively. MongoDB must be
+available when the backend starts handling database-backed requests.
+
+Existing SQLite files are not imported automatically. Migrate any records you
+need to keep into the MongoDB collections before switching the application to
+this backend.
+
 ## Role-scoped learning APIs
 
 Authentication uses a bearer token. Role checks read the current role from the
@@ -58,24 +69,21 @@ used to authorize requests.
 - `/api/learning` class, quiz, slide, and activity routes apply the same
   ownership or enrollment scope. Students cannot read draft learning content.
 
-Uploaded lesson files are stored under `data/presentations/` beside the
-configured SQLite database; classwork attachments and student submission files
-are stored under `data/classwork-files/` and `data/submission-files/`. Each
-upload is limited to 25 MB, and these generated file directories are excluded
-from version control.
+Uploaded lesson files, classwork attachments, and student submission files are
+stored on disk under `learningData/slides/`, `learningData/classwork/`, and
+`learningData/submissions/` by default. Set `LEARNING_DATA_DIR`,
+`SLIDE_DATA_DIR`, `CLASSWORK_DATA_DIR`, or `SUBMISSION_DATA_DIR` to change those
+locations. Each upload is limited to 25 MB.
 Faculty quiz questions support multiple choice, dropdown, checkboxes, short
 answer, and paragraph answers.
 
-The learning schema uses `classes.faculty_id`, unique `classes.join_code`,
-`enrollments`, class-associated `classwork` (`assignment`, `quiz`, and
-`material`), and student `submissions`. Starting the backend detects the legacy
-`classes.teacher_id` schema and renames the legacy learning tables to
-`legacy_backup_*` tables before creating the current schema. This preserves old
-classwork and enrollment data in the SQLite database rather than deleting it;
-the archived rows are retained for manual migration and are not exposed through
-the application APIs.
+The learning data is stored in MongoDB collections, including `classes`,
+`enrollments`, `classwork` (`assignment`, `quiz`, and `material`), and
+`submissions`.
 
-Run authorization tests with:
+Run the tests with a development or test MongoDB server available at
+`MONGODB_URI` (or at the default local address). The tests create and drop
+uniquely named databases:
 
 ```sh
 npm test

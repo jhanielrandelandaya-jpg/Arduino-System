@@ -86,13 +86,21 @@ const requireClassworkAccess = (classIdParam = 'id') => async (req, res, next) =
     if (!learningClass) {
       return res.status(404).json({ message: 'Class not found.' })
     }
+    if (req.userRole === 'Faculty') {
+      if (learningClass.faculty_id !== req.userId) {
+        return res.status(404).json({ message: 'Classwork not found.' })
+      }
+      req.classId = learningClass.id
+      req.classwork = classwork
+      return next()
+    }
     const enrolled = await database.collection('enrollments').findOne({
       class_id: learningClass.id,
       student_id: req.userId,
       status: 'Active',
     })
     if (!enrolled) {
-      return res.status(403).json({ message: 'You are not enrolled in this class.' })
+      return res.status(404).json({ message: 'Classwork not found.' })
     }
     req.classId = learningClass.id
     req.classwork = classwork

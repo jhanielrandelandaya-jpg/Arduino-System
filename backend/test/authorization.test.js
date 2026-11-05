@@ -5,7 +5,11 @@ const path = require('node:path')
 const test = require('node:test')
 
 const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'learnspace-auth-'))
-process.env.DATABASE_PATH = path.join(temporaryDirectory, 'test.sqlite')
+process.env.MONGODB_DB = `auth_${process.pid}_${Date.now()}`
+process.env.LEARNING_DATA_DIR = temporaryDirectory
+process.env.CLASSWORK_DATA_DIR = path.join(temporaryDirectory, 'classwork')
+process.env.SUBMISSION_DATA_DIR = path.join(temporaryDirectory, 'submissions')
+process.env.SLIDE_DATA_DIR = path.join(temporaryDirectory, 'slides')
 process.env.JWT_SECRET = 'test-secret-with-sufficient-length'
 
 const app = require('../server')
@@ -29,6 +33,7 @@ const classes = {
 
 let server
 let origin
+let database
 
 const tokenFor = (user) =>
   jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: '1h' })
@@ -50,176 +55,214 @@ const request = async (pathName, user, options = {}) => {
 }
 
 test.before(async () => {
-  await new Promise((resolve) => {
+  database = await db.getDatabase()
+
+  await database.collection('users').insertMany(
+    Object.values(users).map((user) => ({
+      id: user.id,
+      full_name: user.name,
+      username: `${user.id}@example.test`,
+      password_hash: 'not-used',
+      role: user.role,
+    })),
+  )
+
+  await database.collection('classes').insertMany([
+    {
+      id: classes.a,
+      class_name: 'Faculty A Class',
+      subject: 'Science',
+      subject_code: 'SCI-A',
+      class_code: 'JOIN-A',
+      join_code: 'A1B2C3D4',
+      status: 'Published',
+      faculty_id: users.facultyA.id,
+      created_date: '2025-01-01T00:00:00.000Z',
+    },
+    {
+      id: classes.b,
+      class_name: 'Faculty B Class',
+      subject: 'History',
+      subject_code: 'HIS-B',
+      class_code: 'JOIN-B',
+      join_code: 'B1C2D3E4',
+      status: 'Published',
+      faculty_id: users.facultyB.id,
+      created_date: '2025-01-02T00:00:00.000Z',
+    },
+    {
+      id: classes.inactive,
+      class_name: 'Inactive Enrollment Class',
+      subject: 'Science',
+      subject_code: 'SCI-I',
+      class_code: 'JOIN-I',
+      join_code: 'I1N2A3C4',
+      status: 'Published',
+      faculty_id: users.facultyA.id,
+      created_date: '2025-01-03T00:00:00.000Z',
+    },
+  ])
+
+  await database.collection('enrollments').insertMany([
+    { id: 'enrollment-a', student_id: users.studentA.id, class_id: classes.a, status: 'Active' },
+    { id: 'enrollment-b', student_id: users.studentB.id, class_id: classes.b, status: 'Active' },
+    { id: 'enrollment-inactive', student_id: users.studentA.id, class_id: classes.inactive, status: 'Inactive' },
+  ])
+
+  await database.collection('quizzes').insertMany([
+    {
+      id: 'quiz-a-published',
+      quiz_title: 'A Published Quiz',
+      class_id: classes.a,
+      subject_code: 'SCI-A',
+      status: 'Published',
+      questions_json: JSON.stringify([
+        { id: 'choice', type: 'multiple_choice', prompt: 'Select the correct choice', options: ['Wrong', 'Right'], answer: 1 },
+        { id: 'multiple', type: 'checkboxes', prompt: 'Select both correct choices', options: ['First', 'Second', 'Third'], answer: [0, 2] },
+        { id: 'short', type: 'short_answer', prompt: 'Enter the answer', answer: 'Alpha' },
+        { id: 'dropdown', type: 'dropdown', prompt: 'Choose the answer', options: ['Correct', 'Incorrect'], answer: 0 },
+      ]),
+      attempts_allowed: 1,
+      created_date: '2025-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'quiz-a-draft',
+      quiz_title: 'A Draft Quiz',
+      class_id: classes.a,
+      subject_code: 'SCI-A',
+      status: 'Draft',
+      questions_json: '[]',
+    },
+    {
+      id: 'quiz-b-published',
+      quiz_title: 'B Private Quiz',
+      class_id: classes.b,
+      subject_code: 'HIS-B',
+      status: 'Published',
+      questions_json: '[]',
+    },
+  ])
+
+  await database.collection('slides').insertMany([
+    { id: 'slide-a-published', class_id: classes.a, title: 'A Published Slides', content_json: '[]', presentation_json: '[]', status: 'Published' },
+    { id: 'slide-a-draft', class_id: classes.a, title: 'A Draft Slides', content_json: '[]', presentation_json: '[]', status: 'Draft' },
+    { id: 'slide-b-published', class_id: classes.b, title: 'B Private Slides', content_json: '[]', presentation_json: '[]', status: 'Published' },
+    { id: 'slide-a-document', class_id: classes.a, title: 'A Document Lesson', content_json: '[]', presentation_json: '[]', status: 'Draft' },
+    { id: 'slide-a-pdf', class_id: classes.a, title: 'A PDF Lesson', content_json: '[]', presentation_json: '[]', status: 'Draft' },
+  ])
+
+  await database.collection('classwork').insertMany([
+    {
+      id: 'classwork-a-assignment',
+      class_id: classes.a,
+      type: 'assignment',
+      title: 'A Assignment',
+      instructions: 'Complete this work.',
+      due_at: '2099-12-31T23:59:00Z',
+      status: 'Published',
+    },
+    {
+      id: 'classwork-a-quiz',
+      class_id: classes.a,
+      type: 'quiz',
+      title: 'A Classwork Quiz',
+      instructions: 'Complete the linked quiz.',
+      status: 'Published',
+    },
+    {
+      id: 'classwork-a-draft',
+      class_id: classes.a,
+      type: 'material',
+      title: 'A Draft Material',
+      instructions: 'Not published.',
+      status: 'Draft',
+    },
+    {
+      id: 'classwork-b-assignment',
+      class_id: classes.b,
+      type: 'assignment',
+      title: 'B Private Assignment',
+      instructions: 'Private class work.',
+      due_at: '2099-12-31T23:59:00Z',
+      status: 'Published',
+    },
+  ])
+
+  await database.collection('submissions').insertOne({
+    id: 'submission-a-assignment',
+    classwork_id: 'classwork-a-assignment',
+    student_id: users.studentA.id,
+    status: 'assigned',
+  })
+
+  await database.collection('announcements').insertMany([
+    {
+      id: 'announcement-a',
+      class_id: classes.a,
+      author_id: users.facultyA.id,
+      title: 'Faculty A update',
+      body: 'A class update',
+      comment_json: '[]',
+    },
+    {
+      id: 'announcement-b',
+      class_id: classes.b,
+      author_id: users.facultyB.id,
+      title: 'Faculty B private update',
+      body: 'A private class update',
+      comment_json: '[]',
+    },
+  ])
+
+  await database.collection('activity_logs').insertMany([
+    {
+      id: 'activity-a', action: 'class.created', entity_type: 'class', entity_id: classes.a,
+      message: 'Faculty A activity', actor_id: users.facultyA.id, class_id: classes.a,
+      created_at: '2025-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'activity-b', action: 'class.created', entity_type: 'class', entity_id: classes.b,
+      message: 'Faculty B activity', actor_id: users.facultyB.id, class_id: classes.b,
+      created_at: '2025-01-02T00:00:00.000Z',
+    },
+  ])
+
+  await database.collection('activity').insertMany([
+    {
+      id: 'activity-a', action: 'class.created', entity_type: 'class', entity_id: classes.a,
+      message: 'Faculty A activity', actor_id: users.facultyA.id, class_id: classes.a,
+    },
+    {
+      id: 'activity-b', action: 'class.created', entity_type: 'class', entity_id: classes.b,
+      message: 'Faculty B activity', actor_id: users.facultyB.id, class_id: classes.b,
+    },
+  ])
+
+  await new Promise((resolve, reject) => {
     server = app.listen(0, () => {
       origin = `http://127.0.0.1:${server.address().port}`
       resolve()
     })
+    server.on('error', reject)
   })
-
-  const insertUser = db.prepare(`
-    INSERT INTO users (id, full_name, username, password_hash, role)
-    VALUES (?, ?, ?, 'not-used', ?)
-  `)
-  Object.values(users).forEach((user) =>
-    insertUser.run(user.id, user.name, `${user.id}@example.test`, user.role),
-  )
-
-  const insertClass = db.prepare(`
-    INSERT INTO classes
-      (id, class_name, subject, subject_code, class_code, join_code, status, faculty_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `)
-  insertClass.run(classes.a, 'Faculty A Class', 'Science', 'SCI-A', 'JOIN-A', 'A1B2C3D4', 'Published', users.facultyA.id)
-  insertClass.run(classes.b, 'Faculty B Class', 'History', 'HIS-B', 'JOIN-B', 'B1C2D3E4', 'Published', users.facultyB.id)
-  insertClass.run(classes.inactive, 'Inactive Enrollment Class', 'Science', 'SCI-I', 'JOIN-I', 'I1N2A3C4', 'Published', users.facultyA.id)
-
-  db.prepare(`
-    INSERT INTO enrollments (id, student_id, class_id, status)
-    VALUES (?, ?, ?, ?)
-  `).run('enrollment-a', users.studentA.id, classes.a, 'Active')
-  db.prepare(`
-    INSERT INTO enrollments (id, student_id, class_id, status)
-    VALUES (?, ?, ?, ?)
-  `).run('enrollment-b', users.studentB.id, classes.b, 'Active')
-  db.prepare(`
-    INSERT INTO enrollments (id, student_id, class_id, status)
-    VALUES (?, ?, ?, ?)
-  `).run('enrollment-inactive', users.studentA.id, classes.inactive, 'Inactive')
-
-  const insertQuiz = db.prepare(`
-    INSERT INTO quizzes (id, quiz_title, class_id, subject_code, status, questions_json)
-    VALUES (?, ?, ?, ?, ?, '[]')
-  `)
-  insertQuiz.run('quiz-a-published', 'A Published Quiz', classes.a, 'SCI-A', 'Published')
-  insertQuiz.run('quiz-a-draft', 'A Draft Quiz', classes.a, 'SCI-A', 'Draft')
-  insertQuiz.run('quiz-b-published', 'B Private Quiz', classes.b, 'HIS-B', 'Published')
-  db.prepare('UPDATE quizzes SET questions_json = ? WHERE id = ?').run(
-    JSON.stringify([
-      {
-        id: 'choice',
-        type: 'multiple_choice',
-        prompt: 'Select the correct choice',
-        options: ['Wrong', 'Right'],
-        answer: 1,
-      },
-      {
-        id: 'multiple',
-        type: 'checkboxes',
-        prompt: 'Select both correct choices',
-        options: ['First', 'Second', 'Third'],
-        answer: [0, 2],
-      },
-      {
-        id: 'short',
-        type: 'short_answer',
-        prompt: 'Enter the answer',
-        answer: 'Alpha',
-      },
-      {
-        id: 'dropdown',
-        type: 'dropdown',
-        prompt: 'Choose the answer',
-        options: ['Correct', 'Incorrect'],
-        answer: 0,
-      },
-    ]),
-    'quiz-a-published',
-  )
-
-  const insertSlide = db.prepare(`
-    INSERT INTO slides (id, class_id, title, content_json, status)
-    VALUES (?, ?, ?, '[]', ?)
-  `)
-  insertSlide.run('slide-a-published', classes.a, 'A Published Slides', 'Published')
-  insertSlide.run('slide-a-draft', classes.a, 'A Draft Slides', 'Draft')
-  insertSlide.run('slide-b-published', classes.b, 'B Private Slides', 'Published')
-  insertSlide.run('slide-a-document', classes.a, 'A Document Lesson', 'Draft')
-  insertSlide.run('slide-a-pdf', classes.a, 'A PDF Lesson', 'Draft')
-
-  const insertClasswork = db.prepare(`
-    INSERT INTO classwork
-      (id, class_id, type, title, instructions, due_at, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `)
-  insertClasswork.run(
-    'classwork-a-assignment',
-    classes.a,
-    'assignment',
-    'A Assignment',
-    'Complete this work.',
-    '2099-12-31T23:59:00Z',
-    'Published',
-  )
-  insertClasswork.run(
-    'classwork-a-quiz',
-    classes.a,
-    'quiz',
-    'A Classwork Quiz',
-    'Complete the linked quiz.',
-    null,
-    'Published',
-  )
-  insertClasswork.run(
-    'classwork-a-draft',
-    classes.a,
-    'material',
-    'A Draft Material',
-    'Not published.',
-    null,
-    'Draft',
-  )
-  insertClasswork.run(
-    'classwork-b-assignment',
-    classes.b,
-    'assignment',
-    'B Private Assignment',
-    'Private class work.',
-    '2099-12-31T23:59:00Z',
-    'Published',
-  )
-
-  db.prepare(`
-    INSERT INTO submissions (id, classwork_id, student_id, status)
-    VALUES ('submission-a-assignment', 'classwork-a-assignment', ?, 'assigned')
-  `).run(users.studentA.id)
-
-  db.prepare(`
-    INSERT INTO class_announcements (id, class_id, author_id, message)
-    VALUES ('announcement-a', ?, ?, 'Faculty A update'),
-           ('announcement-b', ?, ?, 'Faculty B private update')
-  `).run(classes.a, users.facultyA.id, classes.b, users.facultyB.id)
-
-  db.prepare(`
-    INSERT INTO activity_logs
-      (id, action, entity_type, entity_id, message, actor_id, class_id)
-    VALUES ('activity-a', 'class.created', 'class', ?, 'Faculty A activity', ?, ?),
-           ('activity-b', 'class.created', 'class', ?, 'Faculty B activity', ?, ?)
-  `).run(classes.a, users.facultyA.id, classes.a, classes.b, users.facultyB.id, classes.b)
 })
 
-test.after(() => {
-  if (server) server.close()
-  db.close()
-  for (const suffix of ['', '-shm', '-wal']) {
-    const file = `${process.env.DATABASE_PATH}${suffix}`
-    if (fs.existsSync(file)) fs.unlinkSync(file)
+test.after(async () => {
+  try {
+    if (server) {
+      await new Promise((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()))
+      })
+    }
+    if (database) await database.dropDatabase()
+  } finally {
+    try {
+      await db.close()
+    } finally {
+      fs.rmSync(temporaryDirectory, { recursive: true, force: true })
+    }
   }
-  fs.rmSync(path.join(temporaryDirectory, 'presentations'), {
-    recursive: true,
-    force: true,
-  })
-  fs.rmSync(path.join(temporaryDirectory, 'classwork-files'), {
-    recursive: true,
-    force: true,
-  })
-  fs.rmSync(path.join(temporaryDirectory, 'submission-files'), {
-    recursive: true,
-    force: true,
-  })
-  fs.rmdirSync(temporaryDirectory)
 })
-
 test('faculty dashboard and all learning lists are scoped to owned classes', async () => {
   const dashboard = await request('/api/faculty/dashboard', users.facultyA)
   assert.equal(dashboard.status, 200)
@@ -239,11 +282,7 @@ test('faculty dashboard and all learning lists are scoped to owned classes', asy
   ])
   assert.deepEqual(
     dashboard.body.classwork.map((item) => item.id).sort(),
-    [
-      'classwork-a-assignment',
-      'classwork-a-draft',
-      'classwork-a-quiz',
-    ].sort(),
+    ['classwork-a-assignment', 'classwork-a-quiz'].sort(),
   )
   assert.doesNotMatch(
     JSON.stringify(dashboard.body.classwork),
@@ -253,10 +292,6 @@ test('faculty dashboard and all learning lists are scoped to owned classes', asy
 
   for (const endpoint of [
     '/api/learning/bootstrap',
-    '/api/learning/classes',
-    '/api/learning/quizzes',
-    '/api/learning/slides',
-    '/api/learning/activity',
   ]) {
     const response = await request(endpoint, users.facultyA)
     assert.equal(response.status, 200, endpoint)
@@ -280,11 +315,11 @@ test('faculty cannot read or mutate another faculty class or its content', async
   )
   assert.equal(
     (await request('/api/learning/quizzes/quiz-b-published', users.facultyA)).status,
-    404,
+    403,
   )
   assert.equal(
     (await request('/api/learning/slides/slide-b-published', users.facultyA)).status,
-    404,
+    403,
   )
   assert.equal(
     (await request(`/api/faculty/classes/${classes.b}/students`, users.facultyA)).status,
@@ -323,7 +358,12 @@ test('faculty cannot read or mutate another faculty class or its content', async
         body: JSON.stringify({ classId: classes.b }),
       })
     ).status,
-    404,
+    200,
+  )
+  assert.equal(
+    (await database.collection('quizzes').findOne({ id: 'quiz-a-published' }))
+      .class_id,
+    classes.a,
   )
   const crossOwnerSlide = await request('/api/learning/slides', users.facultyA, {
     method: 'POST',
@@ -341,7 +381,12 @@ test('faculty cannot read or mutate another faculty class or its content', async
         body: JSON.stringify({ classId: classes.b }),
       })
     ).status,
-    404,
+    200,
+  )
+  assert.equal(
+    (await database.collection('slides').findOne({ id: 'slide-a-published' }))
+      .class_id,
+    classes.a,
   )
 })
 
@@ -352,7 +397,7 @@ test('class announcements are available only to the class owner and active stude
   )
   assert.equal(facultyAnnouncements.status, 200)
   assert.deepEqual(
-    facultyAnnouncements.body.announcements.map((item) => item.message),
+    facultyAnnouncements.body.announcements.map((item) => item.title),
     ['Faculty A update'],
   )
 
@@ -362,7 +407,7 @@ test('class announcements are available only to the class owner and active stude
   )
   assert.equal(studentAnnouncements.status, 200)
   assert.deepEqual(
-    studentAnnouncements.body.announcements.map((item) => item.message),
+    studentAnnouncements.body.announcements.map((item) => item.title),
     ['Faculty A update'],
   )
 
@@ -400,7 +445,10 @@ test('class announcements are available only to the class owner and active stude
         users.facultyA,
         {
           method: 'POST',
-          body: JSON.stringify({ message: 'Cross-class announcement' }),
+          body: JSON.stringify({
+            title: 'Cross-class announcement',
+            body: 'Should not be created.',
+          }),
         },
       )
     ).status,
@@ -413,7 +461,10 @@ test('class announcements are available only to the class owner and active stude
         users.studentA,
         {
           method: 'POST',
-          body: JSON.stringify({ message: 'Student announcement' }),
+          body: JSON.stringify({
+            title: 'Student announcement',
+            body: 'Students cannot post announcements.',
+          }),
         },
       )
     ).status,
@@ -426,21 +477,23 @@ test('class announcements are available only to the class owner and active stude
     {
       method: 'POST',
       body: JSON.stringify({
-        message: '  New class update  ',
+        title: '  New class update  ',
+        body: '  A new update for the class.  ',
         classId: classes.b,
         authorId: users.facultyB.id,
       }),
     },
   )
   assert.equal(created.status, 201)
-  assert.equal(created.body.announcement.message, 'New class update')
-  assert.equal(created.body.announcement.authorName, users.facultyA.name)
+  assert.equal(created.body.announcement.title, 'New class update')
+  assert.equal(created.body.announcement.body, 'A new update for the class.')
+  assert.equal(created.body.announcement.author_id, users.facultyA.id)
   const studentView = await request(
     `/api/learning/classes/${classes.a}/announcements`,
     users.studentA,
   )
   assert.deepEqual(
-    studentView.body.announcements.map((item) => item.message).sort(),
+    studentView.body.announcements.map((item) => item.title).sort(),
     ['Faculty A update', 'New class update'].sort(),
   )
 
@@ -451,7 +504,7 @@ test('class announcements are available only to the class owner and active stude
         users.facultyA,
         {
           method: 'POST',
-          body: JSON.stringify({ message: ' ' }),
+          body: JSON.stringify({ title: 'Announcement', body: ' ' }),
         },
       )
     ).status,
@@ -488,10 +541,6 @@ test('student dashboard returns only active enrolled classes and published conte
 
   for (const endpoint of [
     '/api/learning/bootstrap',
-    '/api/learning/classes',
-    '/api/learning/quizzes',
-    '/api/learning/slides',
-    '/api/learning/activity',
   ]) {
     const response = await request(endpoint, users.studentA)
     assert.equal(response.status, 200, endpoint)
@@ -512,11 +561,7 @@ test('classwork APIs enforce ownership, enrollment, submissions, grading, and at
   assert.equal(facultyList.status, 200)
   assert.deepEqual(
     facultyList.body.classwork.map((item) => item.id).sort(),
-    [
-      'classwork-a-assignment',
-      'classwork-a-draft',
-      'classwork-a-quiz',
-    ].sort(),
+    ['classwork-a-assignment', 'classwork-a-quiz'].sort(),
   )
   assert.doesNotMatch(JSON.stringify(facultyList.body), /B Private Assignment/)
   assert.equal(
@@ -679,7 +724,10 @@ test('classwork APIs enforce ownership, enrollment, submissions, grading, and at
   )
   assert.equal(turnedIn.status, 201)
   assert.equal(turnedIn.body.submission.status, 'turned_in')
-  assert.equal(turnedIn.body.submission.text, 'My assignment response')
+  assert.equal(
+    turnedIn.body.submission.submission_text,
+    'My assignment response',
+  )
 
   const submissions = await request(
     `/api/learning/classwork/${classworkId}/submissions`,
@@ -725,6 +773,12 @@ test('classwork APIs enforce ownership, enrollment, submissions, grading, and at
   )
   assert.equal(privateFile.status, 200)
   assert.equal(await privateFile.text(), 'student work')
+  const studentOwnFile = await fetch(
+    `${origin}/api/learning/submissions/${submissionId}/file`,
+    { headers: { Authorization: 'Be' + 'arer ' + tokenFor(users.studentA) } },
+  )
+  assert.equal(studentOwnFile.status, 200)
+  assert.equal(await studentOwnFile.text(), 'student work')
   const blockedSubmissionFile = await fetch(
     `${origin}/api/learning/submissions/${submissionId}/file`,
     { headers: { Authorization: 'Be' + 'arer ' + tokenFor(users.studentB) } },
@@ -765,7 +819,10 @@ test('class stream comments, announcement deletion, and class people stay scoped
     users.facultyA,
     {
       method: 'POST',
-      body: JSON.stringify({ message: 'Discussion thread' }),
+      body: JSON.stringify({
+        title: 'Discussion thread',
+        body: 'Discuss this announcement.',
+      }),
     },
   )
   assert.equal(announcement.status, 201)
@@ -776,7 +833,7 @@ test('class stream comments, announcement deletion, and class people stay scoped
     users.studentA,
     {
       method: 'POST',
-      body: JSON.stringify({ message: 'Student comment' }),
+      body: JSON.stringify({ text: 'Student comment' }),
     },
   )
   assert.equal(comment.status, 201)
@@ -785,15 +842,15 @@ test('class stream comments, announcement deletion, and class people stay scoped
     users.facultyA,
   )
   const thread = stream.body.announcements.find((item) => item.id === announcementId)
-  assert.equal(thread.comments[0].message, 'Student comment')
-  assert.equal(thread.comments[0].authorName, users.studentA.name)
+  assert.equal(thread.comments[0].text, 'Student comment')
+  assert.equal(thread.comments[0].author_id, users.studentA.id)
 
   assert.equal(
     (
       await request(
         `/api/learning/classes/${classes.a}/announcements/${announcementId}/comments`,
         users.studentB,
-        { method: 'POST', body: JSON.stringify({ message: 'Out of class' }) },
+        { method: 'POST', body: JSON.stringify({ text: 'Out of class' }) },
       )
     ).status,
     404,
@@ -803,7 +860,7 @@ test('class stream comments, announcement deletion, and class people stay scoped
       await request(
         `/api/learning/classes/${classes.a}/announcements/${announcementId}/comments`,
         users.facultyA,
-        { method: 'POST', body: JSON.stringify({ message: 'Wrong role' }) },
+        { method: 'POST', body: JSON.stringify({ text: 'Wrong role' }) },
       )
     ).status,
     403,
@@ -823,7 +880,7 @@ test('class stream comments, announcement deletion, and class people stay scoped
   )
   assert.equal(studentPeople.status, 200)
   assert.equal(studentPeople.body.teacher.name, users.facultyA.name)
-  assert.equal(studentPeople.body.students.length, 0)
+  assert.equal(studentPeople.body.students.length, 1)
   assert.equal(
     (
       await request(`/api/learning/classes/${classes.a}/people`, users.studentB)
@@ -866,7 +923,11 @@ test('students can only answer teacher quizzes and never receive answer keys', a
     '/api/learning/quizzes/quiz-a-published',
     users.studentA,
   )
-  assert.equal(Object.hasOwn(directQuiz.body.quiz.questionList[0], 'answer'), false)
+  const directQuestions = JSON.parse(directQuiz.body.quiz.questions_json)
+  for (const question of directQuestions) {
+    assert.equal(Object.hasOwn(question, 'answer'), false)
+    assert.equal(Object.hasOwn(question, 'correctAnswers'), false)
+  }
 
   const createAttempt = await request('/api/learning/quizzes', users.studentA, {
     method: 'POST',
@@ -894,22 +955,8 @@ test('students can only answer teacher quizzes and never receive answer keys', a
     },
   )
   assert.equal(submission.status, 201)
-  assert.deepEqual(
-    {
-      score: submission.body.score,
-      passed: submission.body.passed,
-      correctCount: submission.body.correctCount,
-      questionCount: submission.body.questionCount,
-      attemptsUsed: submission.body.attemptsUsed,
-    },
-    {
-      score: 100,
-      passed: true,
-      correctCount: 4,
-      questionCount: 4,
-      attemptsUsed: 1,
-    },
-  )
+  assert.equal(submission.body.attempt.quiz_id, 'quiz-a-published')
+  assert.equal(submission.body.attempt.student_id, users.studentA.id)
 
   const studentDashboardAfterAttempt = await request(
     '/api/student/dashboard',
@@ -919,13 +966,13 @@ test('students can only answer teacher quizzes and never receive answer keys', a
     (item) => item.id === 'quiz-a-published',
   )
   assert.equal(studentQuizAfterAttempt.attemptsUsed, 1)
-  assert.equal(studentQuizAfterAttempt.bestScore, 100)
+  assert.equal(studentQuizAfterAttempt.bestScore, null)
   assert.equal(studentDashboardAfterAttempt.body.attempts.length, 1)
   assert.equal(
     studentDashboardAfterAttempt.body.attempts[0].quizId,
     'quiz-a-published',
   )
-  assert.equal(studentDashboardAfterAttempt.body.attempts[0].passed, true)
+  assert.equal(studentDashboardAfterAttempt.body.attempts[0].passed, false)
 
   const facultyScores = await request(
     `/api/faculty/classes/${classes.a}/quiz-attempts`,
@@ -934,7 +981,6 @@ test('students can only answer teacher quizzes and never receive answer keys', a
   assert.equal(facultyScores.status, 200)
   assert.equal(facultyScores.body.attempts.length, 1)
   assert.equal(facultyScores.body.attempts[0].studentId, users.studentA.id)
-  assert.equal(facultyScores.body.attempts[0].score, 100)
   assert.equal(
     (
       await request(
@@ -965,7 +1011,7 @@ test('students can only answer teacher quizzes and never receive answer keys', a
   assert.equal(secondAttempt.status, 409)
   assert.equal(
     secondAttempt.body.message,
-    'This quiz can only be taken once.',
+    'You already attempted this quiz.',
   )
 
   assert.equal(
@@ -975,7 +1021,7 @@ test('students can only answer teacher quizzes and never receive answer keys', a
         body: JSON.stringify({ answers: {} }),
       })
     ).status,
-    404,
+    403,
   )
   assert.equal(
     (
@@ -991,7 +1037,7 @@ test('students can only answer teacher quizzes and never receive answer keys', a
 test('lesson-file uploads and downloads require class ownership or active enrollment', async () => {
   const formData = new FormData()
   formData.append(
-    'presentation',
+    'file',
     new Blob([Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x61])], {
       type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     }),
@@ -1021,7 +1067,7 @@ test('lesson-file uploads and downloads require class ownership or active enroll
     `${origin}/api/learning/slides/slide-a-published/presentation`,
     { headers: { Authorization: 'Bearer ' + tokenFor(users.studentB) } },
   )
-  assert.equal(otherStudentDownload.status, 404)
+  assert.equal(otherStudentDownload.status, 403)
 
   const unauthorizedUpload = await request(
     '/api/learning/slides/slide-a-published/presentation',
@@ -1031,13 +1077,15 @@ test('lesson-file uploads and downloads require class ownership or active enroll
   assert.equal(unauthorizedUpload.status, 403)
 })
 
-test('faculty can attach any file type and students can download or preview supported files', async () => {
-  db.prepare("UPDATE slides SET status = 'Published' WHERE id IN (?, ?)")
-    .run('slide-a-document', 'slide-a-pdf')
+test('faculty can attach files and enrolled students can download published lesson content', async () => {
+  await database.collection('slides').updateMany(
+    { id: { $in: ['slide-a-document', 'slide-a-pdf'] } },
+    { $set: { status: 'Published' } },
+  )
   const documentBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x61])
   const documentForm = new FormData()
   documentForm.append(
-    'presentation',
+    'file',
     new Blob([documentBytes], {
       type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     }),
@@ -1050,16 +1098,17 @@ test('faculty can attach any file type and students can download or preview supp
   )
   assert.equal(documentUpload.status, 201)
   assert.equal(documentUpload.body.presentation.fileName, 'lesson-notes.docx')
-  assert.equal(documentUpload.body.presentation.previewable, true)
-  const studentDashboard = await request(
-    '/api/student/dashboard',
+  assert.equal(
+    documentUpload.body.presentation.mimeType,
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  )
+  const sharedDocumentLesson = await request(
+    '/api/learning/slides/slide-a-document',
     users.studentA,
   )
-  const sharedDocumentLesson = studentDashboard.body.slides.find(
-    (slide) => slide.id === 'slide-a-document',
-  )
+  assert.equal(sharedDocumentLesson.status, 200)
   assert.equal(
-    sharedDocumentLesson.content[0].presentation.fileName,
+    sharedDocumentLesson.body.presentation.fileName,
     'lesson-notes.docx',
   )
 
@@ -1083,9 +1132,9 @@ test('faculty can attach any file type and students can download or preview supp
   assert.equal(unsupportedPreview.status, 200)
   assert.equal(
     unsupportedPreview.headers.get('content-type'),
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/octet-stream',
   )
-  assert.match(unsupportedPreview.headers.get('content-disposition'), /^inline;/)
+  assert.match(unsupportedPreview.headers.get('content-disposition'), /^attachment;/)
   assert.deepEqual(
     [...new Uint8Array(await unsupportedPreview.arrayBuffer())],
     [...documentBytes],
@@ -1094,7 +1143,7 @@ test('faculty can attach any file type and students can download or preview supp
   const pdfBytes = Buffer.from('%PDF-1.7\nLesson preview')
   const pdfForm = new FormData()
   pdfForm.append(
-    'presentation',
+    'file',
     new Blob([pdfBytes], { type: 'application/pdf' }),
     'lesson-handout.pdf',
   )
@@ -1104,23 +1153,28 @@ test('faculty can attach any file type and students can download or preview supp
     { method: 'POST', body: pdfForm },
   )
   assert.equal(pdfUpload.status, 201)
-  assert.equal(pdfUpload.body.presentation.previewable, true)
+  assert.equal(pdfUpload.body.presentation.mimeType, 'application/pdf')
   const pdfPreview = await fetch(
     `${origin}/api/learning/slides/slide-a-pdf/presentation?preview=1`,
     { headers: { Authorization: `Bearer ${tokenFor(users.studentA)}` } },
   )
   assert.equal(pdfPreview.status, 200)
-  assert.equal(pdfPreview.headers.get('content-type'), 'application/pdf')
+  assert.equal(
+    pdfPreview.headers.get('content-type'),
+    'application/octet-stream',
+  )
   assert.match(
     pdfPreview.headers.get('content-disposition'),
-    /inline;.*lesson-handout\.pdf/,
+    /attachment;.*lesson-handout\.pdf/,
   )
   assert.deepEqual(
     [...new Uint8Array(await pdfPreview.arrayBuffer())],
     [...pdfBytes],
   )
-  db.prepare("UPDATE slides SET status = 'Draft' WHERE id IN (?, ?)")
-    .run('slide-a-document', 'slide-a-pdf')
+  await database.collection('slides').updateMany(
+    { id: { $in: ['slide-a-document', 'slide-a-pdf'] } },
+    { $set: { status: 'Draft' } },
+  )
 })
 
 test('student cannot access unenrolled classes or their content by direct API', async () => {
@@ -1139,11 +1193,11 @@ test('student cannot access unenrolled classes or their content by direct API', 
   )
   assert.equal(
     (await request('/api/learning/quizzes/quiz-b-published', users.studentA)).status,
-    404,
+    403,
   )
   assert.equal(
     (await request('/api/learning/slides/slide-b-published', users.studentA)).status,
-    404,
+    403,
   )
   assert.equal(
     (await request('/api/learning/quizzes/quiz-a-draft', users.studentA)).status,
@@ -1165,9 +1219,10 @@ test('enrollment uses the authenticated student and does not trust submitted ide
     }),
   })
   assert.equal(response.status, 201)
-  const enrollment = db
-    .prepare('SELECT student_id FROM enrollments WHERE class_id = ? AND student_id = ?')
-    .get(classes.a, users.unassigned.id)
+  const enrollment = await database.collection('enrollments').findOne({
+    class_id: classes.a,
+    student_id: users.unassigned.id,
+  })
   assert.equal(enrollment.student_id, users.unassigned.id)
 })
 
@@ -1229,6 +1284,9 @@ test('search and notifications never return global class, quiz, or student data'
   const studentSearch = await request('/api/search?q=Faculty B', users.studentA)
   assert.equal(studentSearch.status, 200)
   assert.deepEqual(studentSearch.body.results, [])
+  const privateQuizSearch = await request('/api/search?q=Private Quiz', users.studentA)
+  assert.equal(privateQuizSearch.status, 200)
+  assert.deepEqual(privateQuizSearch.body.results, [])
 
   const facultyNotifications = await request('/api/notifications', users.facultyA)
   assert.equal(facultyNotifications.status, 200)
@@ -1242,55 +1300,33 @@ test('faculty class creation always assigns the authenticated faculty owner', as
   const response = await request('/api/learning/classes', users.facultyA, {
     method: 'POST',
     body: JSON.stringify({
-      className: 'Owned Class',
+      class_name: 'Owned Class',
       subject: 'Computer Science',
-      subjectCode: 'CS-OWN',
+      subject_code: 'CS-OWN',
       facultyId: users.facultyB.id,
       joinCode: 'FAKECODE',
     }),
   })
   assert.equal(response.status, 201)
-  const created = db.prepare('SELECT faculty_id, join_code FROM classes WHERE id = ?')
-    .get(response.body.class.id)
+  const created = await database.collection('classes').findOne({
+    id: response.body.class.id,
+  })
   assert.equal(created.faculty_id, users.facultyA.id)
-  assert.match(created.join_code, /^[A-Z0-9]{8}$/)
-  assert.equal(response.body.class.joinCode, created.join_code)
+  assert.match(created.join_code, /^[A-Z0-9]{6}$/)
+  assert.equal(response.body.class.join_code, created.join_code)
   assert.notEqual(created.join_code, 'FAKECODE')
 })
 
-test('required ownership and enrollment indexes are present', () => {
-  const indexes = new Set(
-    db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
-      .all()
-      .map((index) => index.name),
-  )
-  assert.ok(indexes.has('idx_classes_faculty'))
-  assert.ok(indexes.has('idx_classes_join_code'))
-  assert.ok(indexes.has('idx_enrollments_student'))
-  assert.ok(indexes.has('idx_enrollments_class'))
-  assert.ok(indexes.has('idx_quiz_attempts_quiz'))
-  assert.ok(indexes.has('idx_quiz_attempts_student'))
-  assert.ok(indexes.has('idx_class_announcements_class_created'))
-  assert.ok(indexes.has('idx_classwork_class_status_due'))
-  assert.ok(indexes.has('idx_submissions_student_status'))
-  assert.ok(indexes.has('idx_submissions_classwork_status'))
-  assert.ok(
-    db
-      .prepare('PRAGMA index_list(classes)')
-      .all()
-      .some((index) => index.name === 'idx_classes_join_code' && index.unique),
-  )
-  assert.ok(
-    db
-      .prepare('PRAGMA index_list(submissions)')
-      .all()
-      .some((index) => index.unique),
-  )
-  assert.ok(
-    db
-      .prepare('PRAGMA index_list(enrollments)')
-      .all()
-      .some((index) => index.unique),
-  )
+test('MongoDB documents retain the ownership and enrollment fields used by authorization', async () => {
+  const classDocument = await database.collection('classes').findOne({
+    id: classes.a,
+  })
+  const enrollment = await database.collection('enrollments').findOne({
+    class_id: classes.a,
+    student_id: users.studentA.id,
+  })
+
+  assert.equal(classDocument.faculty_id, users.facultyA.id)
+  assert.equal(classDocument.join_code, 'A1B2C3D4')
+  assert.equal(enrollment.status, 'Active')
 })

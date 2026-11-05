@@ -63,7 +63,8 @@ router.get('/dashboard', requireAuth, requireRole('Student'), async (req, res) =
       teachers.map((teacher) => [teacher.id, teacher.full_name]),
     )
 
-    const classRows = ownedClasses.map(async (cls) => {
+    const classRows = await Promise.all(
+      ownedClasses.map(async (cls) => {
       const classAssignments = classworkDocs.filter(
         (work) => work.class_id === cls.id && work.type === 'assignment',
       )
@@ -88,17 +89,18 @@ router.get('/dashboard', requireAuth, requireRole('Student'), async (req, res) =
       const classQuizAttempts = attempts.filter((attempt) =>
         classAttempts.includes(attempt.quiz_id),
       )
-      return {
-        ...cls,
-        teacher_name: teacherNames.get(cls.faculty_id) || '',
-        students: 0,
-        lessons: slides.filter((slide) => slide.class_id === cls.id).length,
-        quizzes: quizzes.filter((quiz) => quiz.class_id === cls.id).length,
-        classwork: classworkDocs.filter((work) => work.class_id === cls.id).length,
-        pending_classwork: pendingClasswork,
-        average: null,
-      }
-    })
+        return {
+          ...cls,
+          teacher_name: teacherNames.get(cls.faculty_id) || '',
+          students: 0,
+          lessons: slides.filter((slide) => slide.class_id === cls.id).length,
+          quiz_count: quizzes.filter((quiz) => quiz.class_id === cls.id).length,
+          classwork_count: classworkDocs.filter((work) => work.class_id === cls.id).length,
+          pending_classwork: pendingClasswork,
+          average: null,
+        }
+      }),
+    )
 
     const quizRows = await Promise.all(
       quizzes.map(async (quiz) => {
@@ -195,12 +197,13 @@ router.get('/dashboard', requireAuth, requireRole('Student'), async (req, res) =
 })
 
 router.post('/enrollments', requireAuth, requireRole('Student'), async (req, res) => {
-  const joinCode =
+  const joinCode = (
     typeof req.body?.joinCode === 'string'
       ? req.body.joinCode.trim()
       : typeof req.body?.classCode === 'string'
         ? req.body.classCode.trim()
         : ''
+  ).toUpperCase()
   if (!joinCode) {
     return res.status(400).json({ message: 'Enter a class code.' })
   }
@@ -265,4 +268,3 @@ router.post('/enrollments', requireAuth, requireRole('Student'), async (req, res
 })
 
 module.exports = router
-

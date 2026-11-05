@@ -14,15 +14,26 @@ router.get('/', requireAuth, requireRole('Faculty', 'Student'), async (req, res)
     const database = await getDatabase()
     const pattern = new RegExp(escapeRegex(term), 'i')
 
-    const classes = await database.collection('classes').find({}).toArray()
+    const accessibleClassIds =
+      req.userRole === 'Faculty'
+        ? null
+        : (
+            await database
+              .collection('enrollments')
+              .find({ student_id: req.userId, status: 'Active' })
+              .toArray()
+          ).map((enrollment) => enrollment.class_id)
+    const classQuery =
+      req.userRole === 'Faculty'
+        ? { faculty_id: req.userId }
+        : {
+            id: { $in: accessibleClassIds },
+            status: 'Published',
+          }
+    const classes = await database.collection('classes').find(classQuery).toArray()
+    const classesById = new Map(classes.map((cls) => [cls.id, cls]))
     const classResults = []
     for (const cls of classes) {
-      if (
-        req.userRole === 'Student' &&
-        cls.status !== 'Published'
-      ) {
-        continue
-      }
       const matches =
         pattern.test(cls.class_name || '') ||
         pattern.test(cls.subject || '') ||
@@ -43,19 +54,11 @@ router.get('/', requireAuth, requireRole('Faculty', 'Student'), async (req, res)
     const quizzes = await database.collection('quizzes').find({}).toArray()
     const quizResults = []
     for (const quiz of quizzes) {
-      const cls = await database
-        .collection('classes')
-        .findOne({ id: quiz.class_id })
+      const cls = classesById.get(quiz.class_id)
       if (!cls) continue
       const matches = pattern.test(quiz.quiz_title || '') || pattern.test(quiz.subject_code || '')
       if (!matches) continue
-      if (
-        req.userRole === 'Student' &&
-        (cls.status !== 'Published' || quiz.status !== 'Published')
-      ) {
-        continue
-      }
-      if (req.userRole === 'Faculty' && cls.faculty_id !== req.userId) {
+      if (req.userRole === 'Student' && quiz.status !== 'Published') {
         continue
       }
       quizResults.push({

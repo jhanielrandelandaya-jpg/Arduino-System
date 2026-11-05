@@ -95,23 +95,62 @@ const removePresentationFile = (presentation) => {
 }
 const previewMimeForFile = (extension, prefix) => {
   const buffer = Buffer.from(prefix || [])
+  const fileExtension = extension.replace(/^\./, '').toLowerCase()
   const isPdf = buffer.subarray(0, 5).toString('latin1') === '%PDF-'
   const isPng = buffer.subarray(0, 8).toString('latin1') === '\u0089PNG\r\n\u001a\u000a'
   const isJpg = buffer.subarray(0, 2).toString('latin1') === '\u00FF\u00D8'
   const isGif = buffer.subarray(0, 3).toString('latin1') === 'GIF'
   const isWebp = buffer.subarray(0, 4).toString('latin1') === 'RIFF' && buffer.subarray(8, 12).toString('latin1') === 'WEBP'
-  const isMp4 = buffer.subarray(0, 4).toString('latin1') === 'ftyp'
-  const isTxt = extension === '.txt' || buffer.toString('latin1').includes('learnspace')
-  const isJson = extension === '.json'
-  const isHtml = extension === '.html' || buffer.subarray(0, 15).toString('latin1') === '<!DOCTYPE html'
-  const isCsv = extension === '.csv'
-  const isMarkdown = extension === '.md' || buffer.subarray(0, 2).toString('utf8') === '# '
-  const isAudio = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'opus'].includes(extension.replace('.', '').toLowerCase())
-  const isVideo = ['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v', 'ogv', '3gp'].includes(extension.replace('.', '').toLowerCase())
-  const isOffice = ['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx'].includes(extension.replace('.', '').toLowerCase())
-  const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'heic', 'heif', 'tiff'].includes(extension.replace('.', '').toLowerCase())
-  const isZip = ['zip'].includes(extension.replace('.', '').toLowerCase())
-  const mime = isPdf ? 'application/pdf' : isImage ? 'image/png' : isJpg ? 'image/jpeg' : isGif ? 'image/gif' : isWebp ? 'image/webp' : isSvg ? 'image/svg+xml' : isAudio ? 'audio/mpeg' : isVideo ? 'video/mp4' : isOffice ? 'application/vnd.openxmlformats-officedocument.' + (extension.toLowerCase().includes('spreadsheet') ? 'spreadsheetml.sheet' : extension.toLowerCase().includes('presentation') ? 'presentationml.presentation' : extension.toLowerCase().includes('word') ? 'wordprocessingml.document' : 'spreadsheetml.sheet') : isText ? 'text/plain' : isJson ? 'application/json' : isHtml ? 'text/html' : isCsv ? 'text/csv' : isMarkdown ? 'text/markdown' : isZip ? 'application/zip' : isAudio ? 'audio/mpeg' : isVideo ? 'video/mp4' : isOffice ? 'application/vnd.openxmlformats-officedocument.' + (extension.toLowerCase().includes('spreadsheet') ? 'spreadsheetml.sheet' : extension.toLowerCase().includes('presentation') ? 'presentationml.presentation' : extension.toLowerCase().includes('word') ? 'wordprocessingml.document' : 'spreadsheetml.sheet') : 'application/octet-stream'
+  const isSvg = fileExtension === 'svg'
+  const isJson = fileExtension === 'json'
+  const isHtml = fileExtension === 'html' || buffer.subarray(0, 15).toString('latin1') === '<!DOCTYPE html'
+  const isCsv = fileExtension === 'csv'
+  const isMarkdown = fileExtension === 'md' || buffer.subarray(0, 2).toString('utf8') === '# '
+  const isText = ['txt', 'text', 'log'].includes(fileExtension)
+  const officeMimeTypes = {
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  }
+  const audioMimeTypes = {
+    mp3: 'audio/mpeg',
+    wav: 'audio/wav',
+    ogg: 'audio/ogg',
+    m4a: 'audio/mp4',
+    aac: 'audio/aac',
+    flac: 'audio/flac',
+    opus: 'audio/opus',
+  }
+  const videoMimeTypes = {
+    mp4: 'video/mp4',
+    webm: 'video/webm',
+    mov: 'video/quicktime',
+    mkv: 'video/x-matroska',
+    avi: 'video/x-msvideo',
+    m4v: 'video/x-m4v',
+    ogv: 'video/ogg',
+    '3gp': 'video/3gpp',
+  }
+  const mime =
+    isPdf ? 'application/pdf' :
+      isPng ? 'image/png' :
+        isJpg ? 'image/jpeg' :
+          isGif ? 'image/gif' :
+            isWebp ? 'image/webp' :
+              isSvg ? 'image/svg+xml' :
+                audioMimeTypes[fileExtension] ||
+                videoMimeTypes[fileExtension] ||
+                officeMimeTypes[fileExtension] ||
+                (fileExtension === 'json' ? 'application/json' :
+                  isHtml ? 'text/html' :
+                    isCsv ? 'text/csv' :
+                      isMarkdown ? 'text/markdown' :
+                        isText ? 'text/plain' :
+                          fileExtension === 'zip' ? 'application/zip' :
+                            'application/octet-stream')
   return mime
 }
 const getFaculty = async (req, res, next) => {
@@ -205,12 +244,26 @@ const mapClasswork = (row) => ({
   subject_code: row.subject_code,
   faculty_id: row.faculty_id,
 })
-const mapQuiz = (row, context = {}) => ({
-  ...row,
-  class_name: context.class_name,
-  subject_code: context.subject_code,
-  faculty_id: context.faculty_id,
-})
+const mapQuiz = (row, context = {}, includeAnswers = true) => {
+  const mapped = {
+    ...row,
+    class_name: context.class_name,
+    subject_code: context.subject_code,
+    faculty_id: context.faculty_id,
+  }
+  if (!includeAnswers && typeof row.questions_json === 'string') {
+    mapped.questions_json = JSON.stringify(
+      safeJsonArray(row.questions_json).map((question) => {
+        if (!question || typeof question !== 'object' || Array.isArray(question)) {
+          return question
+        }
+        const { answer, correctAnswers, ...studentQuestion } = question
+        return studentQuestion
+      }),
+    )
+  }
+  return mapped
+}
 const mapSlide = (row, context = {}) => ({
   ...row,
   class_name: context.class_name,
@@ -507,7 +560,7 @@ router.delete(
 router.post(
   '/classes/:id/announcements/:announcementId/comments',
   requireAuth,
-  requireRole('Faculty', 'Student'),
+  requireRole('Student'),
   requireClassAccess('id'),
   async (req, res) => {
     const body = req.body || {}
@@ -633,6 +686,9 @@ router.get(
       if (!learningClass) {
         return res.status(404).json({ message: 'Class not found.' })
       }
+      const teacher = await database
+        .collection('users')
+        .findOne({ id: learningClass.faculty_id })
       const students = await database
         .collection('enrollments')
         .find({ class_id: req.classId, status: 'Active' })
@@ -651,7 +707,10 @@ router.get(
       }
       studentRows.sort((a, b) => a.name.localeCompare(b.name))
       return res.json({
-        teacher: { id: learningClass.faculty_id, name: learningClass.faculty_id },
+        teacher: {
+          id: learningClass.faculty_id,
+          name: teacher ? teacher.full_name : '',
+        },
         students: studentRows,
       })
     } catch (error) {
@@ -697,6 +756,15 @@ router.post(
     try {
       const database = await getDatabase()
       const id = crypto.randomUUID()
+      if (type === 'quiz' && body.quizId) {
+        const quiz = await database.collection('quizzes').findOne({
+          id: body.quizId,
+          class_id: req.classId,
+        })
+        if (!quiz) {
+          return res.status(400).json({ message: 'Choose a quiz in this class.' })
+        }
+      }
       const classRecord = await database
         .collection('classes')
         .findOne({ id: req.classId })
@@ -1153,6 +1221,31 @@ router.get(
       if (!submission?.file_id || !isStoredFileId(submission.file_id)) {
         return res.status(404).json({ message: 'Submission file not found.' })
       }
+      const classwork = await database
+        .collection('classwork')
+        .findOne({ id: submission.classwork_id })
+      const learningClass = classwork
+        ? await database.collection('classes').findOne({ id: classwork.class_id })
+        : null
+      if (!learningClass) {
+        return res.status(404).json({ message: 'Submission file not found.' })
+      }
+      if (req.userRole === 'Faculty' && learningClass.faculty_id !== req.userId) {
+        return res.status(404).json({ message: 'Submission file not found.' })
+      }
+      if (req.userRole === 'Student') {
+        if (submission.student_id !== req.userId) {
+          return res.status(404).json({ message: 'Submission file not found.' })
+        }
+        const enrollment = await database.collection('enrollments').findOne({
+          class_id: learningClass.id,
+          student_id: req.userId,
+          status: 'Active',
+        })
+        if (!enrollment) {
+          return res.status(404).json({ message: 'Submission file not found.' })
+        }
+      }
       const filePath = path.join(submissionDirectory, submission.file_id)
       if (!fs.existsSync(filePath)) {
         return res.status(404).json({ message: 'Submission file not found.' })
@@ -1392,6 +1485,9 @@ router.get(
     try {
       const database = await getDatabase()
       const quiz = await database.collection('quizzes').findOne({ id: req.quiz.id })
+      if (req.userRole === 'Student' && quiz.status !== 'Published') {
+        return res.status(404).json({ message: 'Quiz not found.' })
+      }
       const attempts = await database
         .collection('quiz_attempts')
         .find({ quiz_id: quiz.id })
@@ -1414,7 +1510,11 @@ router.get(
         context.subject_code = classRecord.subject_code
         context.faculty_id = classRecord.faculty_id
       }
-      return res.json({ quiz: mapQuiz(quiz, context) , attempts, latest_attempt: latest })
+      return res.json({
+        quiz: mapQuiz(quiz, context, req.userRole !== 'Student'),
+        attempts,
+        latest_attempt: latest,
+      })
     } catch (error) {
       console.error('Load quiz error:', error)
       return res.status(500).json({ message: 'Could not load the quiz.' })
@@ -1660,6 +1760,9 @@ router.get(
     try {
       const database = await getDatabase()
       const slide = await database.collection('slides').findOne({ id: req.slide.id })
+      if (req.userRole === 'Student' && slide.status !== 'Published') {
+        return res.status(404).json({ message: 'Slide not found.' })
+      }
       const context = {
         class_name: null,
         subject_code: null,
@@ -1897,5 +2000,3 @@ router.get(
 )
 
 module.exports = router
-
-
