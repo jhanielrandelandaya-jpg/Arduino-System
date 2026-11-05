@@ -7288,3 +7288,176 @@
     flex: 1;
   }
 }
+
+.lms-role-faculty {
+  --accent: #7542f5;
+  --accent-dark: #5b2bd6;
+  --accent-soft: #f2edff;
+  --accent-rgb: 117, 66, 245;
+  --canvas: #f7f5fc;
+  --line: #e9e3f5;
+  --line-strong: #dcd2ef;
+}
+
+.lms-role-faculty .lms-sidebar {
+  border-right-color: #e8e1f4;
+  box-shadow: 14px 0 36px rgba(67, 35, 122, 0.06);
+}
+
+.lms-role-faculty .lms-brand-mark {
+  background: linear-gradient(145deg, #a855f7 0%, #753cf4 52%, #5530d8 100%);
+  box-shadow:
+    0 10px 24px rgba(117, 66, 245, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.lms-role-faculty .lms-role-card {
+  border-color: #e7ddfa;
+  background: linear-gradient(115deg, #f8f3ff 0%, #f0ebff 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+.lms-role-faculty .lms-role-icon {
+  color: #7138e8;
+  background: linear-gradient(145deg, #eee4ff, #e1d5ff);
+}
+
+.lms-role-faculty .lms-nav-link:hover {
+  color: #5928cc;
+  background: linear-gradient(90deg, #f7f2ff, #f0edff);
+}
+
+.lms-role-faculty .lms-nav-link.is-active {
+  color: #5c2acb;
+  background: linear-gradient(100deg, #eee5ff 0%, #f3edff 58%, #e9edff 100%);
+  box-shadow:
+    inset 3px 0 0 #8246f5,
+    inset 0 0 0 1px rgba(130, 70, 245, 0.08);
+}
+
+.lms-role-faculty .lms-nav-link.is-active svg {
+  color: #753cf4;
+}
+
+.lms-role-faculty .lms-topbar {
+  border-bottom-color: #e9e3f3;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.lms-role-faculty .lms-main {
+  background:
+    radial-gradient(ellipse at 92% 6%, rgba(201, 168, 255, 0.14), transparent 30%),
+    linear-gradient(180deg, #faf9fd 0%, #f6f4fb 100%);
+}
+
+.lms-role-faculty .lms-content {
+  background: transparent;
+}
+
+.lms-role-faculty .lms-btn-primary {
+  background: linear-gradient(115deg, #8145f5 0%, #6d3de8 52%, #5945e9 100%);
+  box-shadow:
+    0 8px 18px rgba(108, 61, 222, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.lms-role-faculty .lms-btn-primary:hover:not(:disabled) {
+  background: linear-gradient(115deg, #7136e9 0%, #5f30d4 52%, #4c38d6 100%);
+  box-shadow: 0 11px 22px rgba(108, 61, 222, 0.27);
+}
+
+.lms-role-faculty .lms-page-eyebrow {
+  color: #7542e8;
+}
+
+.lms-role-faculty .lms-page-title {
+  color: #201a35;
+}
+
+.lms-role-faculty .lms-faculty-kpi {
+  border-color: #ebe4f7;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(181, 139, 255, 0.15), transparent 43%),
+    linear-gradient(145deg, #ffffff 0%, #fdfbff 100%);
+  box-shadow:
+    0 9px 26px rgba(64, 40, 108, 0.055),
+    inset 0 1px 0 #ffffff;
+}
+
+.lms-role-faculty .lms-faculty-kpi-icon {
+  color: #6a35df;
+  background: linear-gradient(145deg, #f0e5ff 0%, #e5ddff 100%);
+  box-shadow: inset 0 0 0 1px rgba(117, 66, 245, 0.1);
+}
+
+.lms-role-faculty .lms-faculty-mini {
+  background:
+    radial-gradient(circle at 100% 0%, rgba(190, 163, 255, 0.12), transparent 46%),
+    #ffffff;
+  box-shadow: 0 8px 24px rgba(64, 40, 108, 0.045);
+}
+
+.lms-role-faculty .lms-faculty-mini-icon {
+  color: #7240df;
+  background: linear-gradient(145deg, #f1eaff, #e8e2ff);
+}
+
+.lms-role-faculty .lms-faculty-panel {
+  border-color: #e8e2f2;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(253, 251, 255, 0.98));
+  box-shadow:
+    0 10px 28px rgba(64, 40, 108, 0.05),
+    inset 0 1px 0 #ffffff;
+}
+
+.lms-role-faculty .lms-faculty-panel .lms-table th,
+.lms-role-faculty .lms-faculty-management .lms-table th {
+  color: #6f6684;
+  background: linear-gradient(100deg, #f4efff, #f5f2ff 58%, #eff1ff);
+}
+
+.lms-role-faculty .lms-filter-input:focus-within,
+.lms-role-faculty .lms-select:focus {
+  border-color: rgba(117, 66, 245, 0.48);
+  box-shadow: 0 0 0 3px rgba(117, 66, 245, 0.12);
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table-wrap {
+  border-color: #e7e0f1;
+  box-shadow:
+    0 10px 28px rgba(64, 40, 108, 0.05),
+    inset 0 1px 0 #ffffff;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-subject-code,
+.lms-role-faculty .lms-faculty-code {
+  color: #642fd1;
+  background: linear-gradient(135deg, #f2eaff, #ece9ff);
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table-user .lms-link,
+.lms-role-faculty .lms-link {
+  color: #6e38df;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table-user .lms-link:hover,
+.lms-role-faculty .lms-link:hover {
+  color: #4e25b4;
+}
+
+.lms-role-faculty .lms-footer {
+  border-top-color: #e9e3f3;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lms-role-faculty .lms-nav-link,
+  .lms-role-faculty .lms-btn-primary {
+    transition:
+      color 0.18s ease,
+      background 0.18s ease,
+      box-shadow 0.18s ease,
+      transform 0.18s ease;
+  }
+}
