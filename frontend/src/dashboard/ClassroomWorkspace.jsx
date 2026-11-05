@@ -60,7 +60,9 @@ export default function ClassroomWorkspace({
   studentQuizContent,
 }) {
   const notify = useToast()
-  const [activeTab, setActiveTab] = useState('Stream')
+  const [activeTab, setActiveTab] = useState(() =>
+    window.location.hash === '#class-quizzes' ? 'Classwork' : 'Stream',
+  )
   const [announcementsResult, setAnnouncementsResult] = useState(null)
   const [message, setMessage] = useState('')
   const [posting, setPosting] = useState(false)
@@ -80,6 +82,15 @@ export default function ClassroomWorkspace({
     },
     [attachmentPreview],
   )
+
+  useEffect(() => {
+    if (activeTab === 'Classwork' && window.location.hash === '#class-quizzes') {
+      document.getElementById('class-quizzes')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+    }
+  }, [activeTab])
 
   useEffect(() => {
     let active = true

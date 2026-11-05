@@ -71,9 +71,9 @@ const getStudentLearningLocks = async (database, classId, studentId) => {
       }
     }
     const topicQuizzes = quizzesBySlide.get(slide.id)
-    if (topicQuizzes.some((quiz) => !passedQuizIds.has(quiz.id))) {
-      priorTopicsPassed = false
-    }
+    priorTopicsPassed =
+      topicQuizzes.length > 0 &&
+      topicQuizzes.every((quiz) => passedQuizIds.has(quiz.id))
   }
 
   return { lockedSlideIds, lockedQuizIds }

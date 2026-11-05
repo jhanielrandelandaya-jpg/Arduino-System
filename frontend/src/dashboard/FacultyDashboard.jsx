@@ -52,6 +52,7 @@ function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
     classwork,
     createSlide,
     updateSlide,
+    deleteSlide,
     createClass,
     updateClass,
     deleteClass,
@@ -206,6 +207,15 @@ function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
     }
   }
 
+  const deleteLesson = async (id) => {
+    try {
+      await deleteSlide(id)
+      notify('Lesson deleted.')
+    } catch (error) {
+      notify(error.message, 'error')
+    }
+  }
+
   const saveQuiz = async (quiz) => {
     const isEditing = quizzes.some((item) => item.id === quiz.id)
     const payload = {
@@ -294,6 +304,7 @@ function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
               subjects={subjects}
               onSave={saveLesson}
               onToggleStatus={toggleLessonStatus}
+              onDeleteLesson={deleteLesson}
               onPreviewLessonFile={loadSlideFilePreview}
               onGenerateSummary={generateLessonSummary}
               userId={user.id}
@@ -1274,6 +1285,7 @@ function LessonManagement({
   subjects,
   onSave,
   onToggleStatus,
+  onDeleteLesson,
   onPreviewLessonFile,
   onGenerateSummary,
   userId,
@@ -1308,6 +1320,13 @@ function LessonManagement({
     } finally {
       setPreviewingLessonId('')
     }
+  }
+
+  const deleteLesson = async (lesson) => {
+    if (!window.confirm(`Delete "${lesson.title}"? This cannot be undone.`)) {
+      return
+    }
+    await onDeleteLesson(lesson.id)
   }
 
   const filtered = lessons.filter((lesson) => {
@@ -1468,6 +1487,15 @@ function LessonManagement({
                       title={`Edit ${lesson.title}`}
                     >
                       <Icon name="edit" size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      className="lms-icon-btn lms-icon-btn-danger"
+                      onClick={() => deleteLesson(lesson)}
+                      aria-label={`Delete ${lesson.title}`}
+                      title={`Delete ${lesson.title}`}
+                    >
+                      <Icon name="trash" size={14} />
                     </button>
                   </div>
                 </td>

@@ -910,6 +910,102 @@ test('students cannot access the next lesson or quiz before passing the prior qu
   await database.collection('classes').deleteOne({ id: classId })
 })
 
+test('a later lesson stays locked until the prior lesson has a passed quiz', async () => {
+  const classId = 'missing-topic-quiz-class'
+  const slideIds = ['missing-quiz-topic-1', 'missing-quiz-topic-2']
+  await database.collection('classes').insertOne({
+    id: classId,
+    _id: classId,
+    class_name: 'Missing Topic Quiz',
+    subject: 'Computer Science',
+    subject_code: 'CS-MISS',
+    status: 'Published',
+    faculty_id: users.facultyA.id,
+  })
+  await database.collection('enrollments').insertOne({
+    id: 'missing-topic-quiz-enrollment',
+    class_id: classId,
+    student_id: users.studentA.id,
+    status: 'Active',
+  })
+  await database.collection('slides').insertMany(
+    slideIds.map((id, index) => ({
+      id,
+      _id: id,
+      class_id: classId,
+      title: `Topic ${index + 1}`,
+      status: 'Published',
+      order_index: index,
+      content_json: JSON.stringify([{ text: `Content ${index + 1}` }]),
+      created_date: `2026-02-0${index + 1}T00:00:00.000Z`,
+    })),
+  )
+
+  const dashboardBeforeQuiz = await request(
+    '/api/student/dashboard',
+    users.studentA,
+  )
+  const lockedTopic = dashboardBeforeQuiz.body.slides.find(
+    (slide) => slide.id === slideIds[1],
+  )
+  assert.equal(lockedTopic.locked, true)
+  assert.equal(
+    (await request(`/api/learning/slides/${slideIds[1]}`, users.studentA))
+      .status,
+    403,
+  )
+
+  await database.collection('quizzes').insertOne({
+    id: 'missing-topic-first-quiz',
+    _id: 'missing-topic-first-quiz',
+    class_id: classId,
+    topic_id: slideIds[0],
+    title: 'Topic 1 Quiz',
+    quiz_title: 'Topic 1 Quiz',
+    status: 'Published',
+    questions_json: '[]',
+    created_date: '2026-02-01T00:00:00.000Z',
+  })
+  const dashboardAfterQuizAdded = await request(
+    '/api/student/dashboard',
+    users.studentA,
+  )
+  assert.equal(
+    dashboardAfterQuizAdded.body.slides.find(
+      (slide) => slide.id === slideIds[1],
+    ).locked,
+    true,
+  )
+
+  await database.collection('quiz_attempts').insertOne({
+    id: 'missing-topic-first-passed-attempt',
+    quiz_id: 'missing-topic-first-quiz',
+    class_id: classId,
+    student_id: users.studentA.id,
+    passed: true,
+    score: 100,
+    status: 'Submitted',
+  })
+  const dashboardAfterPass = await request('/api/student/dashboard', users.studentA)
+  assert.equal(
+    dashboardAfterPass.body.slides.find(
+      (slide) => slide.id === slideIds[1],
+    ).locked,
+    false,
+  )
+  assert.equal(
+    (await request(`/api/learning/slides/${slideIds[1]}`, users.studentA))
+      .status,
+    200,
+  )
+
+  await database.collection('quiz_attempts').deleteMany({ class_id: classId })
+  await database.collection('quizzes').deleteMany({ class_id: classId })
+  await database.collection('slides').deleteMany({ class_id: classId })
+  await database.collection('enrollments').deleteMany({ class_id: classId })
+  await database.collection('classes').deleteOne({ id: classId })
+})
+
 test('faculty dashboard and all learning lists are scoped to owned classes', async () => {
   const dashboard = await request('/api/faculty/dashboard', users.facultyA)
   assert.equal(dashboard.status, 200)
@@ -2007,6 +2103,28 @@ test('faculty class creation always assigns the authenticated faculty owner', as
   assert.equal(frontendCreated.subject_code, 'CS-FRONTEND')
   assert.equal(frontendCreated.academic_year, '2026-2027')
   assert.equal(frontendCreated.faculty_id, users.facultyA.id)
+})
+
+test('faculty can delete an owned lesson and its attached presentation file', async () => {
+  const slideId = 'slide-delete-test'
+  const fileId = '5ad88f32-0498-4ef9-8a55-821f2cb17850'
+  const slideDirectory = process.env.SLIDE_DATA_DIR
+  fs.mkdirSync(slideDirectory, { recursive: true })
+  fs.writeFileSync(path.join(slideDirectory, fileId), 'presentation')
+  await database.collection('slides').insertOne({
+    id: slideId,
+    class_id: classes.a,
+    title: 'Lesson to delete',
+    presentation_json: JSON.stringify([{ fileId, fileName: 'lesson.pdf' }]),
+  })
+
+  const response = await request(`/api/learning/slides/${slideId}`, users.facultyA, {
+    method: 'DELETE',
+  })
+
+  assert.equal(response.status, 200)
+  assert.equal(await database.collection('slides').findOne({ id: slideId }), null)
+  assert.equal(fs.existsSync(path.join(slideDirectory, fileId)), false)
 })
 
 test('MongoDB documents retain the ownership and enrollment fields used by authorization', async () => {

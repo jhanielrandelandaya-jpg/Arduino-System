@@ -15,7 +15,6 @@ import {
   DonutChart,
   EmptyState,
   Field,
-  MetricRing,
   Modal,
   PageHeader,
   ProgressBar,
@@ -258,7 +257,6 @@ function StudentWorkspace({ user, onLogout, onUserUpdate }) {
           element={
             <StudentOverview
               user={user}
-              results={results}
               classes={classes}
               quizzes={quizzes}
               slides={slides}
@@ -440,7 +438,6 @@ function StudentJoinClassForm({ onEnroll }) {
 
 function StudentOverview({
   user,
-  results,
   classes,
   quizzes,
   slides,
@@ -457,13 +454,15 @@ function StudentOverview({
     (subject) => subject.status !== 'Archived',
   )
   const assignedQuizzes = quizzes.filter((quiz) => quiz.type === 'Faculty quiz')
-  const completedLessons = 0
-  const overallProgress = quizzes.length
-    ? Math.min(100, Math.round((results.length / quizzes.length) * 100))
-    : 0
-  const passedQuizzes = results.filter(
-    (result) => result.status === 'Passed',
+  const passedQuizzes = assignedQuizzes.filter(
+    (quiz) => quiz.passed || quiz.status === 'Passed',
   ).length
+  const overallProgress = assignedQuizzes.length
+    ? Math.round((passedQuizzes / assignedQuizzes.length) * 100)
+    : 0
+  const progressMessage = assignedQuizzes.length
+    ? `You’ve passed ${passedQuizzes} of ${assignedQuizzes.length} assigned quizzes. Keep learning at your own pace.`
+    : 'Your quiz progress will appear here when your teachers assign assessments.'
   const continueLearning = slides.slice(0, 2).map((slide) => ({
     lesson: {
       ...slide,
@@ -485,10 +484,7 @@ function StudentOverview({
           <h1>
             Welcome back, {firstName} <span aria-hidden="true">👋</span>
           </h1>
-          <p>
-            You&apos;ve completed {overallProgress}% of your weekly goal. Keep
-            the momentum going and finish strong.
-          </p>
+          <p>{progressMessage}</p>
           <div className="lms-welcome-actions">
             <Link
               to="/student/lessons"
@@ -507,9 +503,32 @@ function StudentOverview({
         </div>
 
         <div className="lms-welcome-metrics">
-          <MetricRing value={overallProgress} display={`${overallProgress}%`} label="Quiz progress" tone="blue" />
-          <MetricRing value={Math.min(100, completedLessons)} display={completedLessons} label="Lessons complete" tone="violet" />
-          <MetricRing value={Math.min(100, passedQuizzes)} display={passedQuizzes} label="Quizzes passed" tone="amber" />
+          <div className="lms-welcome-metric">
+            <span className="lms-welcome-metric-icon">
+              <Icon name="trend" size={16} />
+            </span>
+            <strong>{overallProgress}%</strong>
+            <span className="lms-welcome-metric-label">Quiz progress</span>
+            <small>
+              {passedQuizzes} of {assignedQuizzes.length} passed
+            </small>
+          </div>
+          <div className="lms-welcome-metric">
+            <span className="lms-welcome-metric-icon">
+              <Icon name="book" size={16} />
+            </span>
+            <strong>{totalLessons}</strong>
+            <span className="lms-welcome-metric-label">Lessons available</span>
+            <small>Across your classes</small>
+          </div>
+          <div className="lms-welcome-metric">
+            <span className="lms-welcome-metric-icon">
+              <Icon name="check" size={16} />
+            </span>
+            <strong>{passedQuizzes}</strong>
+            <span className="lms-welcome-metric-label">Quizzes passed</span>
+            <small>Keep up the great work</small>
+          </div>
         </div>
       </section>
 
@@ -822,8 +841,8 @@ function StudentOverview({
                 <Icon name="checkCircle" size={16} />
               </span>
               <div>
-                <strong>{completedLessons}</strong>
-                <span>Completed</span>
+                <strong>{passedQuizzes}</strong>
+                <span>Quizzes passed</span>
               </div>
             </article>
             <article className="lms-widget-stat">
@@ -864,22 +883,9 @@ function StudentOverview({
               </div>
             </div>
             <ProgressBar
-              label="Lessons completed"
-              value={
-                totalLessons
-                  ? Math.round((completedLessons / totalLessons) * 100)
-                  : 0
-              }
+              label="Quiz completion"
+              value={overallProgress}
               tone="blue"
-            />
-            <ProgressBar
-              label="Quizzes passed"
-              value={
-                results.length
-                  ? Math.round((passedQuizzes / results.length) * 100)
-                  : 0
-              }
-              tone="violet"
             />
           </section>
         </aside>
@@ -1636,7 +1642,7 @@ function StudentLessons({
                 </span>
               </span>
               <Link
-                to={`/student/subjects?classId=${encodeURIComponent(selected.subjectId)}`}
+                to={`/student/subjects?classId=${encodeURIComponent(selected.subjectId)}#class-quizzes`}
                 className="lms-btn lms-btn-primary lms-btn-sm"
               >
                 <Icon name="quiz" size={14} />

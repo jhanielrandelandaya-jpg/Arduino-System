@@ -2344,14 +2344,15 @@ router.delete(
   async (req, res) => {
     try {
       const database = await getDatabase()
+      const slide = await database.collection('slides').findOne({ id: req.slide.id })
+      if (!slide) {
+        return res.status(404).json({ message: 'Slide not found.' })
+      }
       const deleted = await database.collection('slides').deleteOne({ id: req.slide.id })
       if (deleted.deletedCount === 0) {
         return res.status(404).json({ message: 'Slide not found.' })
       }
-      const slide = await database.collection('slides').findOne({ id: req.slide.id })
-      const presentations = safeJsonArray(slide.presentation_json)
-      const latestPresentation = presentations.length > 0 ? presentations[presentations.length - 1] : null
-      removePresentationFile(latestPresentation)
+      safeJsonArray(slide.presentation_json).forEach(removePresentationFile)
       return res.json({ message: 'Slide deleted.' })
     } catch (error) {
       console.error('Delete slide error:', error)
