@@ -356,6 +356,17 @@ function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
   )
 }
 
+const formatFacultyDate = (value) => {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? 'Date unavailable'
+    : date.toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+}
+
 const classCodeFor = (subject) => {
   if (subject.classCode) return subject.classCode
 
@@ -876,7 +887,7 @@ function SubjectManagement({
           onClose={closeWorkspace}
         />
       ) : (
-        <>
+        <div className="lms-faculty-management lms-class-management">
           <PageHeader
             eyebrow="Class management"
             title="Manage your classes"
@@ -1038,7 +1049,7 @@ function SubjectManagement({
               description="Try a different search term or add a new subject."
             />
           )}
-        </>
+        </div>
       )}
 
       {editing && (
@@ -1344,7 +1355,7 @@ function LessonManagement({
   }
 
   return (
-    <>
+    <div className="lms-faculty-management lms-lesson-management">
       <PageHeader
         eyebrow="Lesson management"
         title="Lessons & presentations"
@@ -1446,7 +1457,9 @@ function LessonManagement({
                     {lesson.status}
                   </Badge>
                 </td>
-                <td className="lms-cell-muted">{lesson.updated}</td>
+                <td className="lms-cell-muted">
+                  {formatFacultyDate(lesson.updated)}
+                </td>
                 <td>
                   <div className="lms-table-actions">
                     <button
@@ -1539,7 +1552,7 @@ function LessonManagement({
           />
         </Modal>
       )}
-    </>
+    </div>
   )
 }
 

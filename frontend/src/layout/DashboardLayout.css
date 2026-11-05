@@ -6768,3 +6768,523 @@
     margin-left: 0;
   }
 }
+
+.lms-role-faculty .lms-faculty-overview {
+  gap: 20px;
+}
+
+.lms-role-faculty .lms-faculty-overview .lms-page-head {
+  align-items: center;
+  margin-bottom: 0;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #eae6f3;
+}
+
+.lms-role-faculty .lms-faculty-overview .lms-page-eyebrow {
+  margin-bottom: 9px;
+  padding: 5px 9px;
+  border: 1px solid #e7dcff;
+  border-radius: 999px;
+  background: #f7f2ff;
+  font-size: 9px;
+  letter-spacing: 1.4px;
+}
+
+.lms-role-faculty .lms-faculty-overview .lms-page-title {
+  font-size: clamp(28px, 2.6vw, 36px);
+  letter-spacing: -1.35px;
+}
+
+.lms-role-faculty .lms-faculty-overview .lms-page-description {
+  max-width: 600px;
+  margin-top: 7px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.lms-role-faculty .lms-faculty-overview .lms-page-actions {
+  gap: 10px;
+}
+
+.lms-role-faculty .lms-faculty-overview .lms-page-actions .lms-btn {
+  min-height: 42px;
+  border-radius: 11px;
+}
+
+.lms-role-faculty .lms-faculty-kpis {
+  gap: 16px;
+}
+
+.lms-role-faculty .lms-faculty-kpi {
+  min-height: 126px;
+  padding: 19px 19px 17px;
+  border-top: 1px solid rgba(196, 181, 253, 0.28);
+  border-left: 3px solid var(--kpi);
+  border-radius: 17px;
+  background:
+    radial-gradient(circle at 100% 0%, var(--kpi-soft), transparent 42%),
+    #ffffff;
+  box-shadow: 0 8px 24px rgba(37, 24, 66, 0.045);
+}
+
+.lms-role-faculty .lms-faculty-kpi:hover {
+  transform: translateY(-3px);
+  border-color: rgba(124, 58, 237, 0.26);
+  border-left-color: var(--kpi);
+  box-shadow: 0 15px 28px rgba(37, 24, 66, 0.09);
+}
+
+.lms-role-faculty .lms-faculty-kpi-icon {
+  top: 18px;
+  right: 18px;
+  width: 40px;
+  height: 40px;
+  border: 1px solid rgba(124, 58, 237, 0.08);
+  border-radius: 13px;
+}
+
+.lms-role-faculty .lms-faculty-kpi-label {
+  color: #676078;
+  font-size: 11px;
+}
+
+.lms-role-faculty .lms-faculty-kpi strong {
+  margin-top: 10px;
+  font-size: 32px;
+}
+
+.lms-role-faculty .lms-faculty-kpi-meta {
+  margin-top: 6px;
+  font-size: 10px;
+}
+
+.lms-role-faculty .lms-faculty-mini-kpis {
+  gap: 16px;
+}
+
+.lms-role-faculty .lms-faculty-mini {
+  min-height: 116px;
+  padding: 18px 20px;
+  border-left-width: 3px;
+  border-radius: 17px;
+  background: linear-gradient(135deg, #ffffff 0%, #fcfbff 100%);
+  box-shadow: 0 8px 24px rgba(37, 24, 66, 0.04);
+}
+
+.lms-role-faculty .lms-faculty-mini span {
+  font-size: 10px;
+  letter-spacing: 0.09em;
+}
+
+.lms-role-faculty .lms-faculty-mini strong {
+  margin-top: 5px;
+  font-size: 29px;
+}
+
+.lms-role-faculty .lms-faculty-mini p {
+  margin-top: 5px;
+  font-size: 10px;
+}
+
+.lms-role-faculty .lms-faculty-mini-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+}
+
+.lms-role-faculty .lms-faculty-grid {
+  gap: 18px;
+}
+
+.lms-role-faculty .lms-faculty-panel {
+  min-height: 220px;
+  padding: 22px;
+  border-color: #ece8f5;
+  border-radius: 19px;
+  background: #ffffff;
+  box-shadow: 0 10px 28px rgba(37, 24, 66, 0.045);
+}
+
+.lms-role-faculty .lms-faculty-panel .lms-section-head {
+  align-items: flex-start;
+  margin-bottom: 17px;
+}
+
+.lms-role-faculty .lms-faculty-panel .lms-section-head h2 {
+  font-size: 16px;
+  letter-spacing: -0.35px;
+}
+
+.lms-role-faculty .lms-faculty-panel .lms-section-head p {
+  margin-top: 5px;
+  font-size: 11px;
+}
+
+.lms-role-faculty .lms-faculty-panel .lms-section-head .lms-link {
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.lms-role-faculty .lms-faculty-panel .lms-table th {
+  padding: 11px 13px;
+  color: #817a93;
+  background: #f8f6fc;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+
+.lms-role-faculty .lms-faculty-panel .lms-table td {
+  padding: 13px;
+  font-size: 11px;
+}
+
+.lms-role-faculty .lms-faculty-panel .lms-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.lms-role-faculty .lms-faculty-test-cover,
+.lms-role-faculty .lms-faculty-class-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+}
+
+.lms-role-faculty .lms-faculty-test strong,
+.lms-role-faculty .lms-faculty-class-copy strong,
+.lms-role-faculty .lms-faculty-enrollment-copy strong {
+  color: #262137;
+  font-size: 11px;
+}
+
+.lms-role-faculty .lms-faculty-class {
+  gap: 12px;
+  padding: 12px 8px;
+  border-radius: 12px;
+}
+
+.lms-role-faculty .lms-faculty-class:hover {
+  background: #f8f5ff;
+}
+
+.lms-role-faculty .lms-faculty-class + .lms-faculty-class {
+  border-top-color: #f0edf5;
+}
+
+.lms-role-faculty .lms-faculty-class-copy span,
+.lms-role-faculty .lms-faculty-enrollment-copy span {
+  font-size: 9.5px;
+}
+
+.lms-role-faculty .lms-faculty-code {
+  padding: 5px 8px;
+  border: 1px solid #eee6ff;
+  border-radius: 7px;
+  font-size: 8.5px;
+}
+
+.lms-role-faculty .lms-faculty-enrollment {
+  gap: 11px;
+  padding: 12px 2px;
+}
+
+@media (max-width: 980px) {
+  .lms-role-faculty .lms-faculty-overview .lms-page-head {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .lms-role-faculty .lms-faculty-overview {
+    gap: 15px;
+  }
+
+  .lms-role-faculty .lms-faculty-overview .lms-page-head {
+    flex-direction: column;
+    gap: 16px;
+    padding-bottom: 17px;
+  }
+
+  .lms-role-faculty .lms-faculty-overview .lms-page-title {
+    font-size: 28px;
+  }
+
+  .lms-role-faculty .lms-faculty-overview .lms-page-description {
+    font-size: 12px;
+  }
+
+  .lms-role-faculty .lms-faculty-kpi {
+    min-height: 116px;
+  }
+
+  .lms-role-faculty .lms-faculty-panel {
+    min-height: 0;
+    padding: 17px;
+    border-radius: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lms-role-faculty .lms-faculty-kpi,
+  .lms-role-faculty .lms-faculty-class {
+    transition: none;
+  }
+}
+
+.lms-role-faculty .lms-faculty-management .lms-page-head {
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-page-eyebrow {
+  margin-bottom: 8px;
+  color: #7c3aed;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-page-title {
+  font-size: clamp(27px, 2.5vw, 35px);
+  letter-spacing: -1.25px;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-page-description {
+  max-width: 650px;
+  margin-top: 7px;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-page-actions .lms-btn {
+  min-height: 42px;
+  padding: 10px 16px;
+  border-radius: 11px;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-toolbar {
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-filter-input {
+  width: min(440px, 100%);
+  min-width: min(280px, 100%);
+  height: 42px;
+  padding: 0 13px;
+  border-color: #e8e3f2;
+  border-radius: 11px;
+  box-shadow: 0 3px 10px rgba(37, 24, 66, 0.025);
+}
+
+.lms-role-faculty .lms-faculty-management .lms-filter-input input {
+  font-size: 11px;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-select {
+  min-width: 150px;
+  height: 42px;
+  border-color: #e8e3f2;
+  border-radius: 11px;
+  background-color: #ffffff;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-chip {
+  min-height: 34px;
+  padding: 7px 11px;
+  border-color: #ebe6f4;
+  color: #686078;
+  background: #ffffff;
+  font-size: 10px;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table-wrap {
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid #ebe7f2;
+  border-radius: 17px;
+  background: #ffffff;
+  box-shadow: 0 10px 26px rgba(37, 24, 66, 0.04);
+  scrollbar-color: #d3c7e9 #f8f6fb;
+  scrollbar-width: thin;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table {
+  background: #ffffff;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table th {
+  padding: 13px 15px;
+  border-bottom: 1px solid #eeeaf5;
+  color: #817a93;
+  background: #f8f6fc;
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table td {
+  padding: 15px;
+  border-top: 1px solid #f0edf5;
+  color: #353047;
+  font-size: 11px;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table tbody tr:first-child td {
+  border-top: 0;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table tbody tr:hover td {
+  background: #fcfaff;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table-user {
+  gap: 11px;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table-user strong {
+  color: #211d30;
+  font-size: 11.5px;
+  font-weight: 800;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table-user span {
+  color: #817b91;
+  font-size: 9.5px;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table-user .lms-link {
+  margin-top: 2px;
+  padding: 0;
+  font-size: 10px;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table-actions {
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table-actions .lms-icon-btn {
+  width: 33px;
+  height: 33px;
+  border-color: #e9e4f1;
+  border-radius: 9px;
+  color: #6d6680;
+  background: #ffffff;
+}
+
+.lms-role-faculty .lms-faculty-management .lms-table-actions .lms-icon-btn:hover {
+  border-color: #d8c8f4;
+  color: #6d28d9;
+  background: #f8f4ff;
+}
+
+.lms-role-faculty .lms-class-management .lms-table {
+  min-width: 1010px;
+}
+
+.lms-role-faculty .lms-class-management .lms-subject-code {
+  min-width: 48px;
+  justify-content: center;
+  padding: 7px 9px;
+  border: 1px solid rgba(124, 58, 237, 0.1);
+  border-radius: 9px;
+  font-size: 9px;
+}
+
+.lms-role-faculty .lms-class-management .lms-score {
+  gap: 8px;
+  color: #252136;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lms-role-faculty .lms-class-management .lms-score-bar {
+  width: 70px;
+  height: 5px;
+  background: #eee9f7;
+}
+
+.lms-role-faculty .lms-lesson-management .lms-table {
+  min-width: 1040px;
+}
+
+.lms-role-faculty .lms-lesson-management .lms-lesson-row-icon {
+  width: 42px;
+  height: 42px;
+  border: 1px solid rgba(124, 58, 237, 0.08);
+  border-radius: 12px;
+}
+
+.lms-role-faculty .lms-lesson-management .lms-table-user strong {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lms-role-faculty .lms-lesson-management .lms-table td:nth-child(6) {
+  color: #777188;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lms-role-faculty .lms-lesson-management .lms-badge {
+  padding: 6px 9px;
+  font-size: 10px;
+}
+
+.lms-role-faculty .lms-nav {
+  gap: 20px;
+}
+
+.lms-role-faculty .lms-nav-group {
+  gap: 5px;
+}
+
+.lms-role-faculty .lms-nav-link {
+  min-height: 42px;
+  padding: 11px 12px;
+  border-radius: 11px;
+}
+
+.lms-role-faculty .lms-nav-link.is-active {
+  background: #f0e9ff;
+  box-shadow: inset 3px 0 0 #7c3aed;
+}
+
+@media (max-width: 860px) {
+  .lms-role-faculty .lms-faculty-management .lms-page-head {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .lms-role-faculty .lms-faculty-management .lms-page-head {
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+
+  .lms-role-faculty .lms-faculty-management .lms-page-title {
+    font-size: 26px;
+  }
+
+  .lms-role-faculty .lms-faculty-management .lms-page-description {
+    font-size: 11.5px;
+  }
+
+  .lms-role-faculty .lms-faculty-management .lms-page-actions,
+  .lms-role-faculty .lms-faculty-management .lms-page-actions .lms-btn {
+    width: 100%;
+  }
+
+  .lms-role-faculty .lms-faculty-management .lms-filter-input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .lms-role-faculty .lms-lesson-management .lms-toolbar {
+    align-items: stretch;
+  }
+
+  .lms-role-faculty .lms-lesson-management .lms-select {
+    flex: 1;
+  }
+}
