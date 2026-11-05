@@ -46,11 +46,11 @@
 }
 
 .lms-role-faculty .lms-brand-copy strong {
-  color: #f9f5ff;
+  color: #38205f;
 }
 
 .lms-role-faculty .lms-brand-copy small {
-  color: #c4b5fd;
+  color: #6b548f;
 }
 
 .lms-role-faculty .lms-role-card {
@@ -4935,7 +4935,7 @@
 }
 
 .lms-role-faculty .lms-brand-copy small {
-  color: #9993aa;
+  color: #6b548f;
 }
 
 .lms-role-faculty .lms-role-card {
@@ -7309,15 +7309,6 @@
   box-shadow:
     0 10px 24px rgba(117, 66, 245, 0.28),
     inset 0 1px 0 rgba(255, 255, 255, 0.3);
-}
-
-.lms-role-faculty .lms-sidebar .lms-brand-copy strong {
-  color: #38205f;
-  text-shadow: none;
-}
-
-.lms-role-faculty .lms-sidebar .lms-brand-copy small {
-  color: #6b548f;
 }
 
 .lms-role-faculty .lms-role-card {
