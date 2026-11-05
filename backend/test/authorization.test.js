@@ -1985,6 +1985,28 @@ test('faculty class creation always assigns the authenticated faculty owner', as
   assert.match(created.join_code, /^[A-Z0-9]{6}$/)
   assert.equal(response.body.class.join_code, created.join_code)
   assert.notEqual(created.join_code, 'FAKECODE')
+
+  const frontendPayloadResponse = await request('/api/learning/classes', users.facultyA, {
+    method: 'POST',
+    body: JSON.stringify({
+      className: 'Frontend Payload Class',
+      name: 'Frontend Payload Class',
+      subject: 'Computer Science',
+      subjectCode: 'cs-frontend',
+      term: 'First Semester',
+      academicYear: '2026-2027',
+      description: 'Created with the current frontend field names.',
+      facultyId: users.facultyB.id,
+    }),
+  })
+  assert.equal(frontendPayloadResponse.status, 201)
+  const frontendCreated = await database.collection('classes').findOne({
+    id: frontendPayloadResponse.body.class.id,
+  })
+  assert.equal(frontendCreated.class_name, 'Frontend Payload Class')
+  assert.equal(frontendCreated.subject_code, 'CS-FRONTEND')
+  assert.equal(frontendCreated.academic_year, '2026-2027')
+  assert.equal(frontendCreated.faculty_id, users.facultyA.id)
 })
 
 test('MongoDB documents retain the ownership and enrollment fields used by authorization', async () => {

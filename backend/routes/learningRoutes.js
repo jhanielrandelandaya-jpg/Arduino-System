@@ -185,16 +185,30 @@ const recordActivity = async ({ action, entityType, entityId, message, faculty, 
     console.error('Record activity error:', error)
   }
 }
-const classFields = (body = {}, current = {}) => ({
-  className: typeof body.class_name === 'string' ? body.class_name.trim() : current.class_name,
-  subject: typeof body.subject === 'string' ? body.subject.trim() : current.subject,
-  subjectCode: typeof body.subject_code === 'string' ? body.subject_code.trim().toUpperCase() : current.subject_code,
-  term: typeof body.term === 'string' ? body.term.trim() : current.term,
-  academicYear: typeof body.academic_year === 'string' ? body.academic_year.trim() : current.academic_year,
-  description: typeof body.description === 'string' ? body.description : current.description,
-  status: body.status === 'Draft' || body.status === 'Published' ? body.status : current.status,
-  accent: typeof body.accent === 'string' ? body.accent : current.accent,
-})
+const classFields = (body = {}, current = {}) => {
+  const field = (camelCase, snakeCase, currentValue) => {
+    const value = body[camelCase] ?? body[snakeCase]
+    return typeof value === 'string' ? value.trim() : currentValue
+  }
+  return {
+    className: field('className', 'class_name', current.class_name),
+    subject: field('subject', 'subject', current.subject),
+    subjectCode: field('subjectCode', 'subject_code', current.subject_code)
+      ?.toUpperCase(),
+    term: field('term', 'term', current.term),
+    academicYear: field('academicYear', 'academic_year', current.academic_year),
+    description:
+      typeof body.description === 'string'
+        ? body.description
+        : current.description,
+    status:
+      body.status === 'Draft' || body.status === 'Published'
+        ? body.status
+        : current.status,
+    accent:
+      typeof body.accent === 'string' ? body.accent : current.accent,
+  }
+}
 const mapClass = (row) => ({
   id: row.id,
   class_name: row.class_name,
