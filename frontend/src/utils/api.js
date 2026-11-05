@@ -1,3 +1,5 @@
+import { apiUrl } from './apiUrl'
+
 const TOKEN_KEY = 'learnspace_token'
 
 export const getAuthToken = () => {
@@ -13,7 +15,7 @@ export const getAuthToken = () => {
 
 export const apiRequest = async (path, options = {}) => {
   const token = getAuthToken()
-  const response = await fetch(`/api${path}`, {
+  const response = await fetch(apiUrl(`/api${path}`), {
     ...options,
     headers: {
       'Content-Type': 'application/json',

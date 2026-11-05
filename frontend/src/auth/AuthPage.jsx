@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Icon from '../components/Icon.jsx'
+import { apiUrl } from '../utils/apiUrl'
 
 const departmentOptions = [
   {
@@ -172,7 +173,7 @@ function AuthPage({ mode, onAuthenticated }) {
 
     try {
       const response = await fetch(
-        `/api/auth/${isLogin ? 'login' : 'register'}`,
+        apiUrl(`/api/auth/${isLogin ? 'login' : 'register'}`),
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

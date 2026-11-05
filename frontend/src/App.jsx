@@ -9,6 +9,7 @@ import LoginPage from './auth/LoginPage.jsx'
 import StudentDashboard from './dashboard/StudentDashboard.jsx'
 import FacultyDashboard from './dashboard/FacultyDashboard.jsx'
 import './App.css'
+import { apiUrl } from './utils/apiUrl'
 
 const TOKEN_KEY = 'learnspace_token'
 
@@ -75,7 +76,7 @@ function App() {
 
     const loadSession = async () => {
       try {
-        const response = await fetch('/api/auth/me', {
+        const response = await fetch(apiUrl('/api/auth/me'), {
           headers: { Authorization: `Bearer ${token}` },
         })
         const data = await response.json().catch(() => ({}))

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import BrandingPanel from './BrandingPanel.jsx'
 import LoginForm from './LoginForm.jsx'
 import './auth.css'
+import { apiUrl } from '../utils/apiUrl'
 
 const departmentOptions = [
   { value: 'BSAD', title: 'BSAD', description: 'Bachelor of Science in Agricultural Development', courses: [
@@ -83,7 +84,7 @@ export default function LoginPage({ mode: initialMode = 'login', onAuthenticated
 
     try {
       const response = await fetch(
-        `/api/auth/${mode === 'login' ? 'login' : 'register'}`,
+        apiUrl(`/api/auth/${mode === 'login' ? 'login' : 'register'}`),
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

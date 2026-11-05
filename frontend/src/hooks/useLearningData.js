@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { apiUrl } from '../utils/apiUrl'
 
 const TOKEN_KEY = 'learnspace_token'
 const SYNC_KEY = 'learnspace_learning_sync'
@@ -21,7 +22,7 @@ const authHeaders = () => {
 
 const request = async (path, options = {}, basePath = '/api/learning') => {
   const token = getToken()
-  const response = await fetch(`${basePath}${path}`, {
+  const response = await fetch(apiUrl(`${basePath}${path}`), {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -340,7 +341,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
       const formData = new FormData()
       formData.append('file', file)
       const response = await fetch(
-        `/api/learning/classwork/${encodeURIComponent(classworkId)}/attachments`,
+        apiUrl(`/api/learning/classwork/${encodeURIComponent(classworkId)}/attachments`),
         { method: 'POST', headers: authHeaders(), body: formData },
       )
       const data = await response.json().catch(() => ({}))
@@ -357,7 +358,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
   const downloadClassworkAttachment = useCallback(
     async (classworkId, attachment) => {
       const response = await fetch(
-        `/api/learning/classwork/${encodeURIComponent(classworkId)}/attachments/${encodeURIComponent(attachment.fileId)}`,
+        apiUrl(`/api/learning/classwork/${encodeURIComponent(classworkId)}/attachments/${encodeURIComponent(attachment.fileId)}`),
         { headers: authHeaders() },
       )
       if (!response.ok) {
@@ -379,7 +380,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
   const previewClassworkAttachment = useCallback(
     async (classworkId, attachment) => {
       const response = await fetch(
-        `/api/learning/classwork/${encodeURIComponent(classworkId)}/attachments/${encodeURIComponent(attachment.fileId)}?preview=1`,
+        apiUrl(`/api/learning/classwork/${encodeURIComponent(classworkId)}/attachments/${encodeURIComponent(attachment.fileId)}?preview=1`),
         { headers: authHeaders() },
       )
       if (!response.ok) {
@@ -409,7 +410,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
       formData.append('text', text || '')
       if (file) formData.append('file', file)
       const response = await fetch(
-        `/api/learning/classwork/${encodeURIComponent(classworkId)}/submission`,
+        apiUrl(`/api/learning/classwork/${encodeURIComponent(classworkId)}/submission`),
         { method: 'POST', headers: authHeaders(), body: formData },
       )
       const data = await response.json().catch(() => ({}))
@@ -435,7 +436,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
   const downloadSubmissionFile = useCallback(
     async (submissionId, fileName) => {
       const response = await fetch(
-        `/api/learning/submissions/${encodeURIComponent(submissionId)}/file`,
+        apiUrl(`/api/learning/submissions/${encodeURIComponent(submissionId)}/file`),
         { headers: authHeaders() },
       )
       if (!response.ok) {
@@ -459,7 +460,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
       const formData = new FormData()
       formData.append('presentation', file)
       const response = await fetch(
-        `/api/learning/slides/${encodeURIComponent(slideId)}/presentation`,
+        apiUrl(`/api/learning/slides/${encodeURIComponent(slideId)}/presentation`),
         {
           method: 'POST',
           headers: authHeaders(),
@@ -479,7 +480,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
 
   const downloadSlideFile = useCallback(async (slideId) => {
     const response = await fetch(
-      `/api/learning/slides/${encodeURIComponent(slideId)}/presentation`,
+      apiUrl(`/api/learning/slides/${encodeURIComponent(slideId)}/presentation`),
       { headers: authHeaders() },
     )
     if (!response.ok) {
@@ -508,7 +509,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
 
     try {
       const response = await fetch(
-        `/api/learning/slides/${encodeURIComponent(slideId)}/presentation?preview=1`,
+        apiUrl(`/api/learning/slides/${encodeURIComponent(slideId)}/presentation?preview=1`),
         { headers: authHeaders() },
       )
       if (!response.ok) {
@@ -527,7 +528,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
 
   const loadSlideFilePreview = useCallback(async (slideId) => {
     const response = await fetch(
-      `/api/learning/slides/${encodeURIComponent(slideId)}/presentation?preview=1`,
+      apiUrl(`/api/learning/slides/${encodeURIComponent(slideId)}/presentation?preview=1`),
       { headers: authHeaders() },
     )
     if (!response.ok) {

@@ -1,16 +1,32 @@
-# React + Vite
+# Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## Local development
 
-Currently, two official plugins are available:
+Install dependencies and start the Vite development server:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```sh
+npm install
+npm run dev
+```
 
-## React Compiler
+By default, Vite proxies `/api` requests to `http://localhost:3000`. To use a
+different backend locally, copy `.env.example` to `.env.local` and set
+`VITE_API_URL` to the backend origin (without a trailing slash or `/api`).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Deploying to Vercel
 
-## Expanding the ESLint configuration
+Create a Vercel project for this repository and set its **Root Directory** to
+`frontend`. Vercel uses `npm run build` and `dist` as the output directory.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+In the Vercel project's Environment Variables, set:
+
+```text
+VITE_API_URL=https://your-backend.onrender.com
+```
+
+Use the public origin of the Render web service, without a trailing slash or
+`/api`. Vite embeds `VITE_` variables into browser code at build time, so
+redeploy after changing this value. Do not put secrets in frontend variables.
+
+The backend must be deployed and reachable at that URL. It currently allows
+cross-origin API requests; authentication is sent using bearer tokens.
