@@ -1051,6 +1051,49 @@ test('faculty dashboard and all learning lists are scoped to owned classes', asy
   ])
 })
 
+test('faculty dashboard includes enrolled students who submitted quizzes without stored class ids', async () => {
+  const attemptIds = ['legacy-attempt-student-a', 'legacy-attempt-student-b']
+  const enrollmentId = 'temporary-enrollment-student-b-class-a'
+
+  try {
+    await database.collection('enrollments').insertOne({
+      id: enrollmentId,
+      student_id: users.studentB.id,
+      class_id: classes.a,
+      status: 'Active',
+    })
+    await database.collection('quiz_attempts').insertMany(
+      [users.studentA, users.studentB].map((student, index) => ({
+        id: attemptIds[index],
+        quiz_id: 'quiz-a-published',
+        student_id: student.id,
+        status: 'Submitted',
+        score: 80 + index * 10,
+        passed: true,
+        submitted_at: `2025-02-0${index + 1}T00:00:00.000Z`,
+      })),
+    )
+
+    const dashboard = await request('/api/faculty/dashboard', users.facultyA)
+    assert.equal(dashboard.status, 200)
+    const quizTakers = dashboard.body.attempts.filter((attempt) =>
+      attemptIds.includes(attempt.id),
+    )
+    assert.equal(quizTakers.length, 2)
+    assert.deepEqual(
+      quizTakers.map((attempt) => attempt.studentId).sort(),
+      [users.studentA.id, users.studentB.id].sort(),
+    )
+    assert.ok(quizTakers.every((attempt) => attempt.classId === classes.a))
+    assert.ok(quizTakers.every((attempt) => attempt.subjectCode === 'SCI-A'))
+  } finally {
+    await database.collection('quiz_attempts').deleteMany({
+      id: { $in: attemptIds },
+    })
+    await database.collection('enrollments').deleteOne({ id: enrollmentId })
+  }
+})
+
 test('faculty cannot read or mutate another faculty class or its content', async () => {
   assert.equal(
     (await request(`/api/learning/classes/${classes.b}`, users.facultyA)).status,

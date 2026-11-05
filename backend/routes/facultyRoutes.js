@@ -53,10 +53,12 @@ router.get('/dashboard', requireAuth, requireRole('Faculty'), async (req, res) =
     const attemptRows = await Promise.all(
       attempts.map(async (attempt) => {
         const quiz = quizzes.find((item) => item.id === attempt.quiz_id)
+        const classRecord = quiz
+          ? classes.find((item) => item.id === quiz.class_id)
+          : null
         const student = await database
           .collection('users')
           .findOne({ id: attempt.student_id })
-        const classRecord = classes.find((item) => item.id === attempt.class_id)
         if (!quiz || !student || !classRecord) return null
         return {
           id: attempt.id,
