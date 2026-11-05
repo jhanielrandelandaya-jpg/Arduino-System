@@ -263,6 +263,39 @@ test.after(async () => {
     }
   }
 })
+
+test('registration requires and records Security Policy acceptance', async () => {
+  const registration = {
+    fullName: 'Policy Test User',
+    username: 'policy-test-user',
+    password: 'secure-password-123',
+    role: 'Student',
+  }
+
+  const missingAcceptance = await request('/api/auth/register', null, {
+    method: 'POST',
+    body: JSON.stringify(registration),
+  })
+  assert.equal(missingAcceptance.status, 400)
+  assert.match(missingAcceptance.body.message, /Security Policy/)
+
+  const accepted = await request('/api/auth/register', null, {
+    method: 'POST',
+    body: JSON.stringify({
+      ...registration,
+      username: 'policy-test-user-accepted',
+      securityPolicyAccepted: true,
+    }),
+  })
+  assert.equal(accepted.status, 201)
+
+  const created = await database.collection('users').findOne({
+    username: 'policy-test-user-accepted',
+  })
+  assert.equal(created.security_policy_version, '1')
+  assert.ok(Number.isFinite(Date.parse(created.security_policy_accepted_at)))
+})
+
 test('faculty dashboard and all learning lists are scoped to owned classes', async () => {
   const dashboard = await request('/api/faculty/dashboard', users.facultyA)
   assert.equal(dashboard.status, 200)

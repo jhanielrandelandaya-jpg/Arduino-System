@@ -1,6 +1,5 @@
 import Icon from '../components/Icon.jsx'
 import AuthTabs from './AuthTabs.jsx'
-import SocialLogin from './SocialLogin.jsx'
 
 export default function LoginForm({
   mode,
@@ -17,6 +16,8 @@ export default function LoginForm({
   setShowPassword,
   remember,
   setRemember,
+  securityPolicyAccepted,
+  setSecurityPolicyAccepted,
   role,
   setRole,
   department,
@@ -27,7 +28,6 @@ export default function LoginForm({
   roleOptions,
   onSubmit,
   onForgotPassword,
-  onSocial,
 }) {
   const isLogin = mode === 'login'
 
@@ -276,6 +276,43 @@ export default function LoginForm({
               </div>
             )}
 
+            {!isLogin && (
+              <div className="security-policy">
+                <details>
+                  <summary>Read the Security Policy</summary>
+                  <div className="security-policy-content">
+                    <p>
+                      Keep your account secure by using a strong, unique
+                      password and never sharing your password or sign-in
+                      details with anyone.
+                    </p>
+                    <p>
+                      Sign out when using a shared device, keep your device and
+                      browser up to date, and contact your school administrator
+                      promptly if you suspect someone accessed your account.
+                    </p>
+                    <p>
+                      LearnSpace staff will not ask you to disclose your
+                      password. Protect your account information and report
+                      suspicious messages or activity.
+                    </p>
+                  </div>
+                </details>
+                <label className="security-policy-accept">
+                  <input
+                    type="checkbox"
+                    name="securityPolicyAccepted"
+                    checked={securityPolicyAccepted}
+                    onChange={(event) =>
+                      setSecurityPolicyAccepted(event.target.checked)
+                    }
+                    required
+                  />
+                  <span>I have read and agree to follow the Security Policy.</span>
+                </label>
+              </div>
+            )}
+
             <button
               type="submit"
               className="submit-button"
@@ -302,8 +339,6 @@ export default function LoginForm({
               {isLogin ? 'Register now' : 'Sign in'}
             </button>
           </p>
-
-          <SocialLogin onSocial={onSocial} />
 
           <div className="security-badge">
             <Icon name="shield" size={14} />

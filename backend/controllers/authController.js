@@ -8,6 +8,7 @@ const {
 const { jwtSecret, jwtExpiresIn } = require('../config/auth')
 
 const ROLES = ['Student', 'Faculty']
+const SECURITY_POLICY_VERSION = '1'
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const USERNAME_PATTERN = /^[a-zA-Z0-9._-]+$/
 
@@ -36,7 +37,13 @@ const findUserByUsername = async (username, excludeId) => {
 }
 
 const register = async (req, res) => {
-  const { fullName, username, password, role } = req.body || {}
+  const {
+    fullName,
+    username,
+    password,
+    role,
+    securityPolicyAccepted,
+  } = req.body || {}
 
   const cleanName = typeof fullName === 'string' ? fullName.trim() : ''
   const cleanUsername =
@@ -75,6 +82,12 @@ const register = async (req, res) => {
       .json({ message: 'Password must be at least 8 characters.' })
   }
 
+  if (securityPolicyAccepted !== true) {
+    return res.status(400).json({
+      message: 'Please read and accept the Security Policy before registering.',
+    })
+  }
+
   try {
     const exists = await findUserByUsername(cleanUsername)
     if (exists) {
@@ -90,6 +103,8 @@ const register = async (req, res) => {
       password_hash: hashPassword(cleanPassword),
       role: cleanRole,
       created_at: new Date().toISOString(),
+      security_policy_version: SECURITY_POLICY_VERSION,
+      security_policy_accepted_at: new Date().toISOString(),
     }
 
     const database = await getDatabase()
@@ -101,6 +116,8 @@ const register = async (req, res) => {
       password_hash: user.password_hash,
       role: user.role,
       created_at: user.created_at,
+      security_policy_version: user.security_policy_version,
+      security_policy_accepted_at: user.security_policy_accepted_at,
     })
 
     const created = await database

@@ -826,70 +826,55 @@
   font-size: 13.5px;
 }
 
-/* Social login */
-.social-divider {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin: 26px 0 18px 0;
-  color: #94a3b8;
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.social-divider span {
-  flex: 1;
-  border-top: 1px solid #e2e8f0;
-}
-
-.social-buttons {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 26px;
-}
-
-.social-btn {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 11px;
-  border: 1px solid #d8e2f7;
-  border-radius: 12px;
+/* Registration security policy */
+.security-policy {
+  margin: 14px 0 18px;
   color: #334155;
-  background: #ffffff;
-  font-size: 13.5px;
-  font-weight: 600;
+  font-size: 12px;
+}
+
+.security-policy details {
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.security-policy summary {
+  padding: 11px 13px;
+  color: #0057ff;
+  font-weight: 700;
   cursor: pointer;
-  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
 }
 
-.social-btn:hover {
-  border-color: #0057ff;
-  background: #f0f7ff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+.security-policy-content {
+  padding: 0 13px 10px;
+  color: #475569;
+  line-height: 1.55;
 }
 
-.social-icon {
-  width: 22px;
-  height: 22px;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #000000;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  font-weight: 800;
-  font-size: 13px;
-  line-height: 1;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+.security-policy-content p {
+  margin: 0 0 8px;
 }
 
-.social-google .social-icon { background: #fbbc04; color: #000000; }
-.social-microsoft .social-icon { background: #00a4ef; color: #ffffff; }
-.social-apple .social-icon { background: #000000; color: #ffffff; }
+.security-policy-content p:last-child {
+  margin-bottom: 0;
+}
+
+.security-policy-accept {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  color: #475569;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.security-policy-accept input {
+  flex: 0 0 auto;
+  margin: 2px 0 0;
+  accent-color: #0057ff;
+}
 
 /* Security badge */
 .security-badge {

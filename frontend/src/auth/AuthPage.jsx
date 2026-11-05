@@ -209,10 +209,6 @@ function AuthPage({ mode, onAuthenticated }) {
     alert('Password recovery will be added later.')
   }
 
-  const handleSocial = (provider) => {
-    alert(`${provider} sign-in will be added later.`)
-  }
-
   return (
     <main className="auth-page">
       <AuthBrand />
@@ -500,36 +496,6 @@ function AuthPage({ mode, onAuthenticated }) {
               {isLogin ? 'Register now' : 'Sign in'}
             </button>
           </p>
-
-          <div className="social-divider">
-            <span>or continue with</span>
-          </div>
-          <div className="social-buttons">
-            <button
-              type="button"
-              className="social-btn social-google"
-              onClick={() => handleSocial('Google')}
-              aria-label="Sign in with Google"
-            >
-              Google
-            </button>
-            <button
-              type="button"
-              className="social-btn social-microsoft"
-              onClick={() => handleSocial('Microsoft')}
-              aria-label="Sign in with Microsoft"
-            >
-              Microsoft
-            </button>
-            <button
-              type="button"
-              className="social-btn social-apple"
-              onClick={() => handleSocial('Apple')}
-              aria-label="Sign in with Apple"
-            >
-              Apple
-            </button>
-          </div>
 
           <div className="security-badge">
             <Icon name="shield" size={14} />

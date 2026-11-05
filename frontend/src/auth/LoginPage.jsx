@@ -54,17 +54,24 @@ export default function LoginPage({ mode: initialMode = 'login', onAuthenticated
   const [department, setDepartment] = useState('')
   const [course, setCourse] = useState('')
   const [showPassword, setShowPassword] = useState(false)
+  const [securityPolicyAccepted, setSecurityPolicyAccepted] = useState(false)
 
   const switchMode = (nextMode) => {
     setError('')
     setShowPassword(false)
     setPassword('')
+    setSecurityPolicyAccepted(false)
     setMode(nextMode)
   }
 
   const handleSubmit = async (event) => {
     event.preventDefault()
     setError('')
+
+    if (mode === 'register' && !securityPolicyAccepted) {
+      setError('Please read and accept the Security Policy before registering.')
+      return
+    }
 
     const payload = {
       username: username.trim(),
@@ -75,6 +82,7 @@ export default function LoginPage({ mode: initialMode = 'login', onAuthenticated
       payload.fullName = fullName.trim()
       payload.role = role
       payload.department = department
+      payload.securityPolicyAccepted = securityPolicyAccepted
       if (role === 'Student') {
         payload.course = course
       }
@@ -113,10 +121,6 @@ export default function LoginPage({ mode: initialMode = 'login', onAuthenticated
     alert('Password recovery will be added later.')
   }
 
-  const handleSocial = (provider) => {
-    alert(`${provider} sign-in will be added later.`)
-  }
-
   return (
     <main className="login-page">
       <BrandingPanel />
@@ -135,6 +139,8 @@ export default function LoginPage({ mode: initialMode = 'login', onAuthenticated
         setShowPassword={setShowPassword}
         remember={remember}
         setRemember={setRemember}
+        securityPolicyAccepted={securityPolicyAccepted}
+        setSecurityPolicyAccepted={setSecurityPolicyAccepted}
         role={role}
         setRole={setRole}
         department={department}
@@ -145,7 +151,6 @@ export default function LoginPage({ mode: initialMode = 'login', onAuthenticated
         roleOptions={roleOptions}
         onSubmit={handleSubmit}
         onForgotPassword={handleForgotPassword}
-        onSocial={handleSocial}
       />
     </main>
   )
