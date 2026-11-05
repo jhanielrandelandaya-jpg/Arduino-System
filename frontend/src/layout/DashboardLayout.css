@@ -605,6 +605,37 @@
   padding: 22px;
 }
 
+.lms-practice-quizzes {
+  display: grid;
+  gap: 18px;
+}
+
+.lms-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.lms-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.lms-form-actions label {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.lms-form-actions label input {
+  margin: 2px 0 0;
+}
+
 .lms-section-head {
   display: flex;
   align-items: flex-start;

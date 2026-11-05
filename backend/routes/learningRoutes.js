@@ -5,8 +5,14 @@ const express = require('express')
 const multer = require('multer')
 const { getDatabase } = require('../config/database')
 const { requireAuth, requireRole } = require('../middleware/authMiddleware')
-const { requireClassOwner, requireActiveEnrollment, requireClassAccess, requireClassworkOwner, requireClassworkAccess, requireSlideOwner, requireSlideAccess, requireQuizOwner, requireQuizAccess } = require('../middleware/classAccessMiddleware')
+const { requireClassOwner, requireClassOwnerFromBody, requireActiveEnrollment, requireClassAccess, requireClassworkOwner, requireClassworkAccess, requireSlideOwner, requireSlideAccess, requireQuizOwner, requireQuizAccess, getStudentLearningLocks } = require('../middleware/classAccessMiddleware')
 const { quizFields } = require('../utils/learningData')
+const {
+  QUIZ_TIME_LIMIT_MINUTES,
+  PASSING_SCORE,
+  MAX_QUIZ_QUESTIONS,
+  scoreQuiz,
+} = require('../utils/quizRules')
 const classworkUpload = multer({ storage: multer.memoryStorage() })
 const submissionUpload = multer({ storage: multer.memoryStorage() })
 const receiveUpload = (upload, field) => (req, res, next) => {
@@ -70,12 +76,6 @@ const mapAnnouncement = (row) => ({
     }))
     .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))),
 })
-const isCorrectAnswer = (answer, question) => {
-  if (typeof answer === 'string' && typeof question.correct_answer === 'string') {
-    return answer.trim().toLowerCase() === question.correct_answer.trim().toLowerCase()
-  }
-  return answer === question.correct_answer
-}
 const presentationForSlide = (slide) => {
   const presentations = safeJsonArray(slide.presentation_json)
   const fileId = presentations.length > 0 ? presentations[presentations.length - 1].fileId : null
@@ -257,7 +257,12 @@ const mapQuiz = (row, context = {}, includeAnswers = true) => {
         if (!question || typeof question !== 'object' || Array.isArray(question)) {
           return question
         }
-        const { answer, correctAnswers, ...studentQuestion } = question
+        const {
+          answer,
+          correctAnswers,
+          correct_answer,
+          ...studentQuestion
+        } = question
         return studentQuestion
       }),
     )
@@ -301,7 +306,121 @@ const mapSlidePresentation = (row, context = {}) => ({
   faculty_id: context.faculty_id,
 })
 
+const compareSlideDate = (left, right) =>
+  String(left.created_date || '').localeCompare(String(right.created_date || '')) ||
+  String(left.id).localeCompare(String(right.id))
+
+const reorderClassSlides = async (database, classId, slideId, requestedIndex) => {
+  const collection = database.collection('slides')
+  const slides = await collection.find({ class_id: classId }).toArray()
+  const hasCompleteOrder = slides.every((slide) =>
+    Number.isInteger(slide.order_index),
+  )
+  slides.sort(
+    hasCompleteOrder
+      ? (left, right) => left.order_index - right.order_index
+      : compareSlideDate,
+  )
+  const currentIndex = slides.findIndex((slide) => slide.id === slideId)
+  if (currentIndex < 0) return
+  const [slide] = slides.splice(currentIndex, 1)
+  const index =
+    Number.isInteger(requestedIndex) && requestedIndex >= 0
+      ? Math.min(requestedIndex, slides.length)
+      : slides.length
+  slides.splice(index, 0, slide)
+  await Promise.all(
+    slides.map((item, orderIndex) =>
+      collection.updateOne(
+        { _id: item._id },
+        { $set: { order_index: orderIndex } },
+      ),
+    ),
+  )
+}
+
 const router = express.Router()
+
+router.post(
+  '/ai/summaries',
+  requireAuth,
+  requireRole('Faculty'),
+  requireClassOwnerFromBody('classId'),
+  async (req, res) => {
+    const title = typeof req.body.title === 'string' ? req.body.title.trim() : ''
+    const content = typeof req.body.content === 'string' ? req.body.content.trim() : ''
+    if (req.body.consent !== true) {
+      return res.status(400).json({
+        message: 'Confirm that you want to send this lesson text to OpenAI.',
+      })
+    }
+    if (!content) {
+      return res.status(400).json({ message: 'Add lesson text before generating a summary.' })
+    }
+    if (content.length > 30000) {
+      return res.status(413).json({
+        message: 'Lesson text must be 30,000 characters or fewer for AI summarization.',
+      })
+    }
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(503).json({
+        message: 'AI summaries are not configured. Set OPENAI_API_KEY on the backend.',
+      })
+    }
+    try {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 45000)
+      try {
+        const response = await fetch('https://api.openai.com/v1/responses', {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+            instructions:
+              'Write a concise, accurate student-facing summary of the lesson. Use only the supplied lesson text. Do not invent facts.',
+            input: `Lesson title: ${title || 'Untitled lesson'}\n\nLesson text:\n${content}`,
+            max_output_tokens: 180,
+          }),
+        })
+        if (!response.ok) {
+          console.error(`OpenAI summary request failed with status ${response.status}.`)
+          return res.status(502).json({
+            message: `OpenAI could not generate a summary (HTTP ${response.status}). Please try again.`,
+          })
+        }
+        const result = await response.json()
+        const summary =
+          result.output_text ||
+          (Array.isArray(result.output)
+            ? result.output
+                .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
+                .find((item) => item.type === 'output_text')?.text
+            : '')
+        if (typeof summary !== 'string' || !summary.trim()) {
+          console.error('OpenAI summary response did not contain text.')
+          return res.status(502).json({
+            message: 'OpenAI returned an empty summary. Please try again.',
+          })
+        }
+        return res.json({ summary: summary.trim() })
+      } finally {
+        clearTimeout(timeout)
+      }
+    } catch (error) {
+      console.error('Generate AI summary error:', error)
+      return res.status(502).json({
+        message:
+          error.name === 'AbortError'
+            ? 'The AI summary request timed out. Please try again.'
+            : 'Could not reach OpenAI to generate a summary. Please try again.',
+      })
+    }
+  },
+)
 
 router.get(
   '/bootstrap',
@@ -441,6 +560,10 @@ router.get(
         .collection('quizzes')
         .find({ class_id: req.classId, status: 'Published' })
         .toArray()
+      const locks =
+        req.userRole === 'Student'
+          ? await getStudentLearningLocks(database, req.classId, req.userId)
+          : { lockedSlideIds: new Set(), lockedQuizIds: new Set() }
       const context = {
         class_name: classRecord ? classRecord.class_name : '',
         subject_code: classRecord ? classRecord.subject_code : '',
@@ -462,7 +585,23 @@ router.get(
         submitted_count: 0,
         student_count: 0,
       }))
-      return res.json({ class: { ...classRecord, classwork: rows }, announcements, slides, quizzes })
+      const safeSlides = slides.map((slide) =>
+        locks.lockedSlideIds.has(slide.id)
+          ? { ...slide, content_json: '[]', locked: true }
+          : slide,
+      )
+      const safeQuizzes = quizzes.map((quiz) => {
+        const mapped = mapQuiz(quiz, context, req.userRole !== 'Student')
+        return locks.lockedQuizIds.has(quiz.id)
+          ? { ...mapped, questions_json: '[]', locked: true }
+          : { ...mapped, locked: false }
+      })
+      return res.json({
+        class: { ...classRecord, classwork: rows },
+        announcements,
+        slides: safeSlides,
+        quizzes: safeQuizzes,
+      })
     } catch (error) {
       console.error('Load class error:', error)
       return res.status(500).json({ message: 'Could not load the class.' })
@@ -1438,14 +1577,19 @@ router.get(
         .collection('quizzes')
         .find({ class_id: req.classId, status: 'Published' })
         .toArray()
+      const locks =
+        req.userRole === 'Student'
+          ? await getStudentLearningLocks(database, req.classId, req.userId)
+          : { lockedSlideIds: new Set(), lockedQuizIds: new Set() }
       const rows = []
       for (const quiz of quizzes) {
-        const attempts = await database
-          .collection('quizzes')
-          .countDocuments({ class_id: req.classId, type: 'Quiz', quiz_id: quiz.id })
         const attemptDocs = await database
-          .collection('quizzes')
-          .find({ class_id: req.classId, type: 'Quiz', quiz_id: quiz.id })
+          .collection('quiz_attempts')
+          .find(
+            req.userRole === 'Student'
+              ? { quiz_id: quiz.id, student_id: req.userId, status: { $ne: 'In Progress' } }
+              : { quiz_id: quiz.id, status: { $ne: 'In Progress' } },
+          )
           .toArray()
         const latest = attemptDocs.sort(
           (a, b) => String(b.submitted_at || '').localeCompare(String(a.submitted_at || '')),
@@ -1455,17 +1599,22 @@ router.get(
           ? Math.round((attemptDocs.reduce((sum, a) => sum + (Number(a.score) || 0), 0) / attemptDocs.length) * 100) / 100
           : null
         rows.push({
-          ...quiz,
+          ...mapQuiz(quiz, {}, req.userRole !== 'Student'),
           status: quiz.status,
+          questions: safeJsonArray(quiz.questions_json).length,
+          attempts: attemptDocs.length,
+          time_limit_minutes: QUIZ_TIME_LIMIT_MINUTES,
+          passing: PASSING_SCORE,
           class_name: learningClass.class_name,
           subject_code: learningClass.subject_code,
           faculty_id: learningClass.faculty_id,
-          attempts,
           passed_count: passedCount,
           average,
           latest_attempt: latest
             ? { score: latest.score, passed: latest.passed, submitted_at: latest.submitted_at }
             : null,
+          locked: locks.lockedQuizIds.has(quiz.id),
+          ...(locks.lockedQuizIds.has(quiz.id) ? { questions_json: '[]' } : {}),
         })
       }
       return res.json({ quizzes: rows })
@@ -1490,7 +1639,11 @@ router.get(
       }
       const attempts = await database
         .collection('quiz_attempts')
-        .find({ quiz_id: quiz.id })
+        .find(
+          req.userRole === 'Student'
+            ? { quiz_id: quiz.id, student_id: req.userId, status: { $ne: 'In Progress' } }
+            : { quiz_id: quiz.id, status: { $ne: 'In Progress' } },
+        )
         .toArray()
       const latest = attempts.sort(
         (a, b) => String(b.submitted_at || '').localeCompare(String(a.submitted_at || '')),
@@ -1511,13 +1664,97 @@ router.get(
         context.faculty_id = classRecord.faculty_id
       }
       return res.json({
-        quiz: mapQuiz(quiz, context, req.userRole !== 'Student'),
-        attempts,
-        latest_attempt: latest,
+        quiz: {
+          ...mapQuiz(quiz, context, req.userRole !== 'Student'),
+          questions: safeJsonArray(quiz.questions_json).length,
+          time_limit_minutes: QUIZ_TIME_LIMIT_MINUTES,
+          passing: PASSING_SCORE,
+          attempts_used: req.userRole === 'Student' ? attempts.length : undefined,
+          passed: req.userRole === 'Student' ? attempts.some((a) => a.passed) : undefined,
+        },
+        attempts: req.userRole === 'Faculty' ? attempts : undefined,
+        latest_attempt: req.userRole === 'Student' ? latest : undefined,
       })
     } catch (error) {
       console.error('Load quiz error:', error)
       return res.status(500).json({ message: 'Could not load the quiz.' })
+    }
+  },
+)
+
+router.post(
+  '/quizzes/:id/attempts/start',
+  requireAuth,
+  requireRole('Student'),
+  requireQuizAccess('id'),
+  async (req, res) => {
+    try {
+      const database = await getDatabase()
+      const quiz = await database.collection('quizzes').findOne({ id: req.quiz.id })
+      if (quiz.status !== 'Published') {
+        return res.status(404).json({ message: 'Quiz not found.' })
+      }
+      const previousAttempts = await database
+        .collection('quiz_attempts')
+        .find({ quiz_id: quiz.id, student_id: req.userId })
+        .toArray()
+      if (previousAttempts.some((attempt) => attempt.passed)) {
+        return res.status(409).json({ message: 'You have already passed this quiz.' })
+      }
+      if (quiz.status !== 'Published') {
+        return res.status(404).json({ message: 'Quiz not found.' })
+      }
+
+      const now = Date.now()
+      const activeAttempt = previousAttempts.find(
+        (attempt) => attempt.status === 'In Progress',
+      )
+      if (activeAttempt) {
+        if (now - Date.parse(activeAttempt.started_at) <= QUIZ_TIME_LIMIT_MINUTES * 60 * 1000) {
+          return res.json({
+            attemptId: activeAttempt.id,
+            startedAt: activeAttempt.started_at,
+          })
+        }
+        await database.collection('quiz_attempts').updateOne(
+          { id: activeAttempt.id, student_id: req.userId },
+          {
+            $set: {
+              status: 'Submitted',
+              timed_out: true,
+              score: 0,
+              passed: false,
+              correct_count: 0,
+              question_count: safeJsonArray(quiz.questions_json).length,
+              passing: PASSING_SCORE,
+              answers_json: '{}',
+              submitted_at: new Date(now).toISOString(),
+              updated_at: new Date(now).toISOString(),
+            },
+          },
+        )
+      }
+
+      const attemptId = crypto.randomUUID()
+      const startedAt = new Date().toISOString()
+      await database.collection('quiz_attempts').insertOne({
+        _id: attemptId,
+        id: attemptId,
+        quiz_id: quiz.id,
+        class_id: quiz.class_id,
+        student_id: req.userId,
+        status: 'In Progress',
+        started_at: startedAt,
+        answers_json: '{}',
+        score: 0,
+        passed: false,
+        passing: PASSING_SCORE,
+        created_at: startedAt,
+      })
+      return res.status(201).json({ attemptId, startedAt })
+    } catch (error) {
+      console.error('Start quiz attempt error:', error)
+      return res.status(500).json({ message: 'Could not start the quiz.' })
     }
   },
 )
@@ -1531,26 +1768,58 @@ router.post(
     try {
       const database = await getDatabase()
       const quiz = await database.collection('quizzes').findOne({ id: req.quiz.id })
-      const existing = await database
+      if (!Array.isArray(req.body?.answers) && (
+        !req.body?.answers ||
+        typeof req.body.answers !== 'object'
+      )) {
+        return res.status(400).json({ message: 'Submit answers for the quiz.' })
+      }
+      const previousAttempts = await database
         .collection('quiz_attempts')
-        .findOne({ quiz_id: quiz.id, student_id: req.userId })
-      if (existing) {
-        return res.status(409).json({ message: 'You already attempted this quiz.' })
+        .find({ quiz_id: quiz.id, student_id: req.userId })
+        .toArray()
+      if (previousAttempts.some((attempt) => attempt.passed)) {
+        return res.status(409).json({ message: 'You have already passed this quiz.' })
       }
-      const attemptId = crypto.randomUUID()
+      const attemptId =
+        typeof req.body?.attemptId === 'string' ? req.body.attemptId : ''
+      const activeAttempt = previousAttempts.find(
+        (attempt) =>
+          attempt.id === attemptId && attempt.status === 'In Progress',
+      )
+      if (!activeAttempt) {
+        return res.status(400).json({ message: 'Start the quiz before submitting answers.' })
+      }
+      const questions = safeJsonArray(quiz.questions_json)
+      if (questions.length === 0 || questions.length > 20) {
+        return res.status(400).json({ message: 'This quiz has an invalid number of questions.' })
+      }
+      const answers = req.body.answers
+      const timedOut =
+        Date.now() - Date.parse(activeAttempt.started_at) > QUIZ_TIME_LIMIT_MINUTES * 60 * 1000
+      const { correctCount, score, passed } = scoreQuiz(questions, answers, timedOut)
+      const submittedAt = new Date().toISOString()
       const attempt = {
-        _id: attemptId,
-        id: attemptId,
-        quiz_id: quiz.id,
-        class_id: quiz.class_id,
-        student_id: req.userId,
-        answers_json: JSON.stringify((req.body?.answers || {})),
-        score: 0,
-        passed: false,
-        submitted_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        ...activeAttempt,
+        answers_json: JSON.stringify(timedOut ? {} : answers),
+        status: 'Submitted',
+        score,
+        passed,
+        timed_out: timedOut,
+        correct_count: correctCount,
+        question_count: questions.length,
+        passing: PASSING_SCORE,
+        submitted_at: submittedAt,
+        updated_at: submittedAt,
       }
-      await database.collection('quiz_attempts').insertOne(attempt)
+      delete attempt._id
+      const updateResult = await database.collection('quiz_attempts').updateOne(
+        { id: attemptId, student_id: req.userId, status: 'In Progress' },
+        { $set: attempt },
+      )
+      if (updateResult.modifiedCount !== 1) {
+        return res.status(409).json({ message: 'This quiz attempt is no longer active.' })
+      }
       const context = {
         class_name: null,
         subject_code: null,
@@ -1564,7 +1833,13 @@ router.post(
       }
       const attemptRow = { ...attempt }
       delete attemptRow._id
-      return res.status(201).json({ attempt: mapQuizAttempt(attemptRow, context) })
+      return res.status(201).json({
+        attempt: mapQuizAttempt(attemptRow, context),
+        score,
+        passed,
+        correctCount,
+        questionCount: questions.length,
+      })
     } catch (error) {
       console.error('Create quiz attempt error:', error)
       return res.status(500).json({ message: 'Could not start the quiz.' })
@@ -1576,22 +1851,22 @@ router.post(
   '/quizzes',
   requireAuth,
   requireRole('Faculty'),
-  requireClassAccess('id'),
+  requireClassOwnerFromBody(),
   async (req, res) => {
     const body = req.body || {}
     const title = typeof body.title === 'string' ? body.title.trim() : ''
     const description = typeof body.description === 'string' ? body.description : ''
     const instructions = typeof body.instructions === 'string' ? body.instructions : ''
-    const questionCount = Array.isArray(body.questions) ? body.questions.length : 0
-    const timeLimitMinutes = Number(body.timeLimitMinutes) || 0
+    const questions = Array.isArray(body.questions)
+      ? body.questions
+      : Array.isArray(body.questionList)
+        ? body.questionList
+        : []
     if (!title || title.length < 2 || title.length > 200) {
       return res.status(400).json({ message: 'Quiz title must be 2 to 200 characters.' })
     }
-    if (!Array.isArray(body.questions) || body.questions.length < 1) {
-      return res.status(400).json({ message: 'Create at least one quiz question.' })
-    }
-    if (timeLimitMinutes < 1 || timeLimitMinutes > 2880) {
-      return res.status(400).json({ message: 'Time limit must be between 1 and 2880 minutes.' })
+    if (questions.length < 1 || questions.length > MAX_QUIZ_QUESTIONS) {
+      return res.status(400).json({ message: `A quiz must contain between 1 and ${MAX_QUIZ_QUESTIONS} questions.` })
     }
     try {
       const database = await getDatabase()
@@ -1600,14 +1875,31 @@ router.post(
         _id: id,
         id,
         class_id: req.classId,
+        topic_id: typeof body.topicId === 'string' && body.topicId.trim()
+          ? body.topicId.trim()
+          : null,
+        quiz_title: title,
         title,
         description,
         instructions,
-        time_limit_minutes: timeLimitMinutes,
+        time_limit: QUIZ_TIME_LIMIT_MINUTES,
+        time_limit_minutes: QUIZ_TIME_LIMIT_MINUTES,
+        passing: PASSING_SCORE,
+        questions: questions.length,
+        attempts_allowed: null,
         status: body.status === 'Draft' ? 'Draft' : 'Published',
-        questions_json: JSON.stringify(body.questions || []),
+        questions_json: JSON.stringify(questions),
         created_date: new Date().toISOString(),
         updated_at: new Date().toISOString(),
+      }
+      if (quiz.topic_id) {
+        const topic = await database.collection('slides').findOne({
+          id: quiz.topic_id,
+          class_id: req.classId,
+        })
+        if (!topic) {
+          return res.status(400).json({ message: 'Choose a lesson in the selected class.' })
+        }
       }
       await database.collection('quizzes').insertOne(quiz)
       const context = {
@@ -1641,21 +1933,51 @@ router.patch(
       const database = await getDatabase()
       const current = await database.collection('quizzes').findOne({ id: req.quiz.id })
       const body = req.body || {}
-      const title = typeof body.title === 'string' ? body.title.trim() : current.title
+      const title =
+        typeof body.title === 'string'
+          ? body.title.trim()
+          : current.title || current.quiz_title
       const description = typeof body.description === 'string' ? body.description : current.description
       const instructions = typeof body.instructions === 'string' ? body.instructions : current.instructions
       const status = ['Published', 'Draft'].includes(body.status) ? body.status : current.status
-      const timeLimitMinutes = Number(body.timeLimitMinutes) || current.time_limit_minutes
-      const questions = Array.isArray(body.questions) ? body.questions : safeJsonArray(current.questions_json)
+      const topicId =
+        typeof body.topicId === 'string'
+          ? body.topicId.trim() || null
+          : current.topic_id || null
+      const questions = Array.isArray(body.questions)
+        ? body.questions
+        : Array.isArray(body.questionList)
+          ? body.questionList
+          : safeJsonArray(current.questions_json)
+      if (!title || title.length < 2 || title.length > 200) {
+        return res.status(400).json({ message: 'Quiz title must be 2 to 200 characters.' })
+      }
+      if (questions.length < 1 || questions.length > MAX_QUIZ_QUESTIONS) {
+        return res.status(400).json({ message: `A quiz must contain between 1 and ${MAX_QUIZ_QUESTIONS} questions.` })
+      }
+      if (topicId) {
+        const topic = await database.collection('slides').findOne({
+          id: topicId,
+          class_id: current.class_id,
+        })
+        if (!topic) {
+          return res.status(400).json({ message: 'Choose a lesson in the selected class.' })
+        }
+      }
       await database.collection('quizzes').updateOne(
         { _id: current._id },
         {
           $set: {
             title,
+            quiz_title: title,
             description,
             instructions,
             status,
-            time_limit_minutes: timeLimitMinutes,
+            topic_id: topicId,
+            time_limit: QUIZ_TIME_LIMIT_MINUTES,
+            time_limit_minutes: QUIZ_TIME_LIMIT_MINUTES,
+            passing: PASSING_SCORE,
+            questions: questions.length,
             questions_json: JSON.stringify(questions),
             updated_at: new Date().toISOString(),
           },
@@ -1716,6 +2038,10 @@ router.get(
         .collection('slides')
         .find({ class_id: req.classId, status: 'Published' })
         .toArray()
+      const locks =
+        req.userRole === 'Student'
+          ? await getStudentLearningLocks(database, req.classId, req.userId)
+          : { lockedSlideIds: new Set(), lockedQuizIds: new Set() }
       const rows = []
       for (const slide of slides) {
         const context = {
@@ -1732,7 +2058,9 @@ router.get(
         const presentations = safeJsonArray(slide.presentation_json)
         const latestPresentation = presentations.length > 0 ? presentations[presentations.length - 1] : null
         rows.push({
-          ...slide,
+          ...(locks.lockedSlideIds.has(slide.id)
+            ? { ...slide, content_json: '[]', locked: true }
+            : slide),
           status: slide.status,
           class_name: context.class_name,
           subject_code: context.subject_code,
@@ -1868,7 +2196,7 @@ router.post(
   '/slides',
   requireAuth,
   requireRole('Faculty'),
-  requireClassAccess('id'),
+  requireClassOwnerFromBody(),
   async (req, res) => {
     const body = req.body || {}
     const title = typeof body.title === 'string' ? body.title.trim() : ''
@@ -1884,14 +2212,32 @@ router.post(
         _id: id,
         id,
         class_id: req.classId,
+        order_index: Number.isInteger(body.orderIndex) && body.orderIndex >= 0
+          ? body.orderIndex
+          : null,
         title,
         description,
         status,
+        content_json: JSON.stringify(
+          Array.isArray(body.content)
+            ? body.content.filter(
+                (item) => item && typeof item === 'object' && !Array.isArray(item),
+              )
+            : [],
+        ),
         slide_json: JSON.stringify([]),
         created_date: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }
       await database.collection('slides').insertOne(slide)
+      await reorderClassSlides(
+        database,
+        req.classId,
+        id,
+        Number.isInteger(body.orderIndex) && body.orderIndex >= 0
+          ? body.orderIndex
+          : undefined,
+      )
       const context = {
         class_name: null,
         subject_code: null,
@@ -1903,7 +2249,8 @@ router.post(
         context.subject_code = classRecord.subject_code
         context.faculty_id = classRecord.faculty_id
       }
-      const slideRow = { ...slide }
+      const savedSlide = await database.collection('slides').findOne({ id })
+      const slideRow = { ...savedSlide }
       delete slideRow._id
       return res.status(201).json({ slide: mapSlide(slideRow, context) })
     } catch (error) {
@@ -1926,10 +2273,33 @@ router.patch(
       const title = typeof body.title === 'string' ? body.title.trim() : current.title
       const description = typeof body.description === 'string' ? body.description : current.description
       const status = ['Published', 'Draft'].includes(body.status) ? body.status : current.status
+      const contentJson = Array.isArray(body.content)
+        ? JSON.stringify(
+            body.content.filter(
+              (item) => item && typeof item === 'object' && !Array.isArray(item),
+            ),
+          )
+        : current.content_json || '[]'
       await database.collection('slides').updateOne(
         { _id: current._id },
-        { $set: { title, description, status, updated_at: new Date().toISOString() } },
+        {
+          $set: {
+            title,
+            description,
+            status,
+            content_json: contentJson,
+            updated_at: new Date().toISOString(),
+          },
+        },
       )
+      if (Number.isInteger(body.orderIndex) && body.orderIndex >= 0) {
+        await reorderClassSlides(
+          database,
+          current.class_id,
+          current.id,
+          body.orderIndex,
+        )
+      }
       const updated = await database.collection('slides').findOne({ id: req.slide.id })
       const context = {
         class_name: null,

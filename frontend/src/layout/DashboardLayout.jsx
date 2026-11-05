@@ -24,6 +24,7 @@ const navigation = {
       label: 'Assessment',
       items: [
         { label: 'Quiz Results', to: '/student/results', icon: 'chart' },
+        { label: 'Practice Quizzes', to: '/student/practice-quizzes', icon: 'quiz' },
         { label: 'Learning Progress', to: '/student/progress', icon: 'trend' },
       ],
     },

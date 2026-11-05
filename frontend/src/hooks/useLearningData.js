@@ -55,6 +55,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
   const [students, setStudents] = useState([])
   const [classwork, setClasswork] = useState([])
   const [quizAttempts, setQuizAttempts] = useState([])
+  const [practiceQuizzes, setPracticeQuizzes] = useState([])
   const [activity, setActivity] = useState([])
   const [syncedAt, setSyncedAt] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -84,6 +85,9 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
       setStudents(Array.isArray(data.students) ? data.students : [])
       setClasswork(Array.isArray(data.classwork) ? data.classwork : [])
       setQuizAttempts(Array.isArray(data.attempts) ? data.attempts : [])
+      setPracticeQuizzes(
+        Array.isArray(data.practiceQuizzes) ? data.practiceQuizzes : [],
+      )
       setActivity(Array.isArray(data.activity) ? data.activity : [])
       setSyncedAt(data.syncedAt || new Date().toISOString())
       setError('')
@@ -199,12 +203,86 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
   )
 
   const submitQuizAttempt = useCallback(
-    (quizId, answers) =>
+    (quizId, attemptId, answers) =>
       mutate(`/quizzes/${encodeURIComponent(quizId)}/attempts`, {
         method: 'POST',
-        body: JSON.stringify({ answers }),
+        body: JSON.stringify({ attemptId, answers }),
       }),
     [mutate],
+  )
+
+  const startQuizAttempt = useCallback(
+    (quizId) =>
+      mutate(`/quizzes/${encodeURIComponent(quizId)}/attempts/start`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }),
+    [mutate],
+  )
+
+  const generateLessonSummary = useCallback(
+    async (classId, title, content) => {
+      const data = await request('/ai/summaries', {
+        method: 'POST',
+        body: JSON.stringify({ classId, title, content, consent: true }),
+      })
+      return data.summary
+    },
+    [],
+  )
+
+  const createPracticeQuiz = useCallback(
+    async (payload) => {
+      const data = await request(
+        '/practice-quizzes',
+        { method: 'POST', body: JSON.stringify(payload) },
+        '/api/student',
+      )
+      await refresh({ silent: true })
+      signalLearningChange()
+      return data.practiceQuiz
+    },
+    [refresh],
+  )
+
+  const deletePracticeQuiz = useCallback(
+    async (quizId) => {
+      const data = await request(
+        `/practice-quizzes/${encodeURIComponent(quizId)}`,
+        { method: 'DELETE' },
+        '/api/student',
+      )
+      await refresh({ silent: true })
+      signalLearningChange()
+      return data
+    },
+    [refresh],
+  )
+
+  const startPracticeQuizAttempt = useCallback(
+    async (quizId) => {
+      const data = await request(
+        `/practice-quizzes/${encodeURIComponent(quizId)}/attempts/start`,
+        { method: 'POST', body: JSON.stringify({}) },
+        '/api/student',
+      )
+      return data
+    },
+    [],
+  )
+
+  const submitPracticeQuizAttempt = useCallback(
+    async (quizId, attemptId, answers) => {
+      const data = await request(
+        `/practice-quizzes/${encodeURIComponent(quizId)}/attempts`,
+        { method: 'POST', body: JSON.stringify({ attemptId, answers }) },
+        '/api/student',
+      )
+      await refresh({ silent: true })
+      signalLearningChange()
+      return data
+    },
+    [refresh],
   )
 
   const createSlide = useCallback(
@@ -246,6 +324,41 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
     },
     [refresh],
   )
+
+  const getStudentNotes = useCallback(async () => {
+    const data = await request('/notes', {}, '/api/student')
+    return Array.isArray(data.notes) ? data.notes : []
+  }, [])
+
+  const createStudentNote = useCallback(async (payload) => {
+    const data = await request(
+      '/notes',
+      { method: 'POST', body: JSON.stringify(payload) },
+      '/api/student',
+    )
+    signalLearningChange()
+    return data.note
+  }, [])
+
+  const updateStudentNote = useCallback(async (noteId, payload) => {
+    const data = await request(
+      `/notes/${encodeURIComponent(noteId)}`,
+      { method: 'PATCH', body: JSON.stringify(payload) },
+      '/api/student',
+    )
+    signalLearningChange()
+    return data.note
+  }, [])
+
+  const deleteStudentNote = useCallback(async (noteId) => {
+    const data = await request(
+      `/notes/${encodeURIComponent(noteId)}`,
+      { method: 'DELETE' },
+      '/api/student',
+    )
+    signalLearningChange()
+    return data
+  }, [])
 
   const getClassStudents = useCallback(async (classId) => {
     const data = await request(
@@ -552,6 +665,7 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
     students,
     classwork,
     quizAttempts,
+    practiceQuizzes,
     activity,
     syncedAt,
     loading,
@@ -563,11 +677,21 @@ export function useLearningData({ role, pollInterval = 3000 } = {}) {
     createQuiz,
     updateQuiz,
     deleteQuiz,
+    startQuizAttempt,
     submitQuizAttempt,
+    generateLessonSummary,
+    createPracticeQuiz,
+    deletePracticeQuiz,
+    startPracticeQuizAttempt,
+    submitPracticeQuizAttempt,
     createSlide,
     updateSlide,
     deleteSlide,
     enrollClass,
+    getStudentNotes,
+    createStudentNote,
+    updateStudentNote,
+    deleteStudentNote,
     getClassStudents,
     getClassQuizAttempts,
     getClassAnnouncements,

@@ -296,6 +296,620 @@ test('registration requires and records Security Policy acceptance', async () =>
   assert.ok(Number.isFinite(Date.parse(created.security_policy_accepted_at)))
 })
 
+test('AI lesson summaries require faculty ownership, explicit consent, and backend configuration', async () => {
+  const previousApiKey = process.env.OPENAI_API_KEY
+  delete process.env.OPENAI_API_KEY
+  try {
+    const notOwner = await request('/api/learning/ai/summaries', users.facultyB, {
+      method: 'POST',
+      body: JSON.stringify({
+        classId: classes.a,
+        title: 'Lesson',
+        content: 'Lesson text',
+        consent: true,
+      }),
+    })
+    assert.equal(notOwner.status, 404)
+
+    const missingConsent = await request('/api/learning/ai/summaries', users.facultyA, {
+      method: 'POST',
+      body: JSON.stringify({
+        classId: classes.a,
+        title: 'Lesson',
+        content: 'Lesson text',
+      }),
+    })
+    assert.equal(missingConsent.status, 400)
+
+    const notConfigured = await request('/api/learning/ai/summaries', users.facultyA, {
+      method: 'POST',
+      body: JSON.stringify({
+        classId: classes.a,
+        title: 'Lesson',
+        content: 'Lesson text',
+        consent: true,
+      }),
+    })
+    assert.equal(notConfigured.status, 503)
+    assert.match(notConfigured.body.message, /OPENAI_API_KEY/)
+  } finally {
+    if (previousApiKey === undefined) {
+      delete process.env.OPENAI_API_KEY
+    } else {
+      process.env.OPENAI_API_KEY = previousApiKey
+    }
+  }
+})
+
+test('student topic notes are saved persistently and scoped to their owner', async () => {
+  const created = await request('/api/student/notes', users.studentA, {
+    method: 'POST',
+    body: JSON.stringify({
+      topicId: 'slide-a-published',
+      title: 'Cell notes',
+      body: 'Remember the key terms.',
+    }),
+  })
+  assert.equal(created.status, 201)
+  const noteId = created.body.note.id
+
+  const listed = await request('/api/student/notes', users.studentA)
+  assert.equal(listed.status, 200)
+  assert.equal(listed.body.notes[0].body, 'Remember the key terms.')
+  assert.deepEqual(
+    (await request('/api/student/notes', users.studentB)).body.notes,
+    [],
+  )
+
+  const forbiddenUpdate = await request(`/api/student/notes/${noteId}`, users.studentB, {
+    method: 'PATCH',
+    body: JSON.stringify({ body: 'Changed by another student.' }),
+  })
+  assert.equal(forbiddenUpdate.status, 404)
+
+  const updated = await request(`/api/student/notes/${noteId}`, users.studentA, {
+    method: 'PATCH',
+    body: JSON.stringify({ body: 'Updated and synced.' }),
+  })
+  assert.equal(updated.status, 200)
+  assert.equal(updated.body.note.body, 'Updated and synced.')
+  assert.equal(
+    (await request(`/api/student/notes/${noteId}`, users.studentA, {
+      method: 'DELETE',
+    })).status,
+    200,
+  )
+  assert.equal(
+    await database.collection('student_notes').countDocuments({ id: noteId }),
+    0,
+  )
+})
+
+test('lesson text persists and explicit topic links enforce the configured sequence', async () => {
+  const sequenceFaculty = {
+    id: 'faculty-topic-sequence',
+    name: 'Topic Sequence Faculty',
+    role: 'Faculty',
+  }
+  const sequenceStudent = {
+    id: 'student-topic-sequence',
+    name: 'Topic Sequence Student',
+    role: 'Student',
+  }
+  await database.collection('users').insertMany([
+    {
+      id: sequenceFaculty.id,
+      full_name: sequenceFaculty.name,
+      username: 'faculty-topic-sequence@example.test',
+      password_hash: 'not-used',
+      role: sequenceFaculty.role,
+    },
+    {
+      id: sequenceStudent.id,
+      full_name: sequenceStudent.name,
+      username: 'student-topic-sequence@example.test',
+      password_hash: 'not-used',
+      role: sequenceStudent.role,
+    },
+  ])
+  const classId = 'explicit-topic-sequence-class'
+  await database.collection('classes').insertOne({
+    id: classId,
+    _id: classId,
+    class_name: 'Explicit Topic Sequence',
+    subject: 'Science',
+    subject_code: 'SCI-SEQ',
+    status: 'Published',
+    faculty_id: sequenceFaculty.id,
+  })
+  await database.collection('enrollments').insertOne({
+    id: 'explicit-sequence-enrollment',
+    class_id: classId,
+    student_id: sequenceStudent.id,
+    status: 'Active',
+  })
+
+  const laterTopic = await request('/api/learning/slides', sequenceFaculty, {
+    method: 'POST',
+    body: JSON.stringify({
+      classId,
+      title: 'Second topic',
+      content: [{ text: 'This content is persisted.' }],
+      status: 'Published',
+      orderIndex: 1,
+    }),
+  })
+  const firstTopic = await request('/api/learning/slides', sequenceFaculty, {
+    method: 'POST',
+    body: JSON.stringify({
+      classId,
+      title: 'First topic',
+      content: [{ text: 'Foundations come first.' }],
+      status: 'Published',
+      orderIndex: 0,
+    }),
+  })
+  assert.equal(laterTopic.status, 201)
+  assert.equal(firstTopic.status, 201)
+  const question = [
+    { id: 'q1', prompt: 'Choose', type: 'multiple_choice', options: ['No', 'Yes'], answer: 1 },
+  ]
+  const firstQuiz = await request('/api/learning/quizzes', sequenceFaculty, {
+    method: 'POST',
+    body: JSON.stringify({
+      classId,
+      topicId: firstTopic.body.slide.id,
+      title: 'First topic quiz',
+      questions: question,
+    }),
+  })
+  const secondQuiz = await request('/api/learning/quizzes', sequenceFaculty, {
+    method: 'POST',
+    body: JSON.stringify({
+      classId,
+      topicId: laterTopic.body.slide.id,
+      title: 'Second topic quiz',
+      questions: question,
+    }),
+  })
+  assert.equal(firstQuiz.status, 201)
+  assert.equal(secondQuiz.status, 201)
+
+  const accessibleFirst = await request(
+    `/api/learning/slides/${firstTopic.body.slide.id}`,
+    sequenceStudent,
+  )
+  assert.equal(accessibleFirst.status, 200)
+  assert.equal(accessibleFirst.body.slide.content_json.includes('Foundations come first.'), true)
+  assert.equal(
+    (
+      await request(`/api/learning/slides/${laterTopic.body.slide.id}`, sequenceStudent)
+    ).status,
+    403,
+  )
+  assert.equal(
+    (
+      await request(`/api/learning/quizzes/${secondQuiz.body.quiz.id}`, sequenceStudent)
+    ).status,
+    403,
+  )
+  await database.collection('quiz_attempts').insertOne({
+    id: 'explicit-sequence-passed-attempt',
+    quiz_id: firstQuiz.body.quiz.id,
+    class_id: classId,
+    student_id: sequenceStudent.id,
+    passed: true,
+    score: 100,
+    status: 'Submitted',
+  })
+  const accessibleSecond = await request(
+    `/api/learning/slides/${laterTopic.body.slide.id}`,
+    sequenceStudent,
+  )
+  assert.equal(accessibleSecond.status, 200)
+  assert.equal(accessibleSecond.body.slide.content_json.includes('This content is persisted.'), true)
+
+  await database.collection('quiz_attempts').deleteMany({ class_id: classId })
+  await database.collection('quizzes').deleteMany({ class_id: classId })
+  await database.collection('slides').deleteMany({ class_id: classId })
+  await database.collection('enrollments').deleteMany({ class_id: classId })
+  await database.collection('classes').deleteOne({ id: classId })
+  await database.collection('users').deleteMany({
+    id: { $in: [sequenceFaculty.id, sequenceStudent.id] },
+  })
+})
+
+test('student practice quizzes are private, timed, graded, and repeatable until passed', async () => {
+  const quizPayload = {
+    title: 'My Private Review',
+    classId: classes.a,
+    questions: [
+      { id: 'one', prompt: 'Choose one', type: 'multiple_choice', options: ['No', 'Yes'], answer: 1 },
+      { id: 'two', prompt: 'Answer two', type: 'short_answer', options: [], answer: 'Alpha' },
+      { id: 'three', prompt: 'Choose three', type: 'multiple_choice', options: ['Correct', 'Wrong'], answer: 0 },
+      { id: 'four', prompt: 'Answer four', type: 'short_answer', options: [], answer: 'Beta' },
+    ],
+  }
+  const overLimit = await request('/api/student/practice-quizzes', users.studentA, {
+    method: 'POST',
+    body: JSON.stringify({
+      ...quizPayload,
+      questions: Array.from({ length: 21 }, (_, index) => ({
+        id: `too-many-${index}`,
+        prompt: 'Question',
+        type: 'short_answer',
+        answer: 'Answer',
+      })),
+    }),
+  })
+  assert.equal(overLimit.status, 400)
+
+  const created = await request('/api/student/practice-quizzes', users.studentA, {
+    method: 'POST',
+    body: JSON.stringify(quizPayload),
+  })
+  assert.equal(created.status, 201)
+  const quizId = created.body.practiceQuiz.id
+  assert.equal(created.body.practiceQuiz.questions.length, 4)
+  assert.equal(created.body.practiceQuiz.timeLimitMinutes, 10)
+  assert.equal(created.body.practiceQuiz.passingScore, 75)
+
+  const studentDashboard = await request('/api/student/dashboard', users.studentA)
+  assert.deepEqual(
+    studentDashboard.body.practiceQuizzes.map((quiz) => quiz.id),
+    [quizId],
+  )
+  const otherStudentList = await request('/api/student/practice-quizzes', users.studentB)
+  assert.deepEqual(otherStudentList.body.practiceQuizzes, [])
+  assert.equal(
+    (await request('/api/student/practice-quizzes', users.facultyA)).status,
+    403,
+  )
+  assert.equal(
+    (
+      await request(`/api/student/practice-quizzes/${quizId}/attempts/start`, users.studentB, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      })
+    ).status,
+    404,
+  )
+
+  const failedStart = await request(
+    `/api/student/practice-quizzes/${quizId}/attempts/start`,
+    users.studentA,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+  assert.equal(failedStart.status, 201)
+  const failed = await request(
+    `/api/student/practice-quizzes/${quizId}/attempts`,
+    users.studentA,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        attemptId: failedStart.body.attempt.id,
+        answers: { one: 0, two: 'Wrong', three: 0, four: 'Wrong' },
+      }),
+    },
+  )
+  assert.equal(failed.status, 200)
+  assert.equal(failed.body.score, 25)
+  assert.equal(failed.body.passed, false)
+
+  const passedStart = await request(
+    `/api/student/practice-quizzes/${quizId}/attempts/start`,
+    users.studentA,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+  assert.equal(passedStart.status, 201)
+  const passed = await request(
+    `/api/student/practice-quizzes/${quizId}/attempts`,
+    users.studentA,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        attemptId: passedStart.body.attempt.id,
+        answers: { one: 1, two: 'alpha', three: 0, four: 'Wrong' },
+      }),
+    },
+  )
+  assert.equal(passed.body.score, 75)
+  assert.equal(passed.body.passed, true)
+  assert.equal(
+    (
+      await request(`/api/student/practice-quizzes/${quizId}/attempts/start`, users.studentA, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      })
+    ).status,
+    409,
+  )
+  const timeoutQuiz = await request('/api/student/practice-quizzes', users.studentA, {
+    method: 'POST',
+    body: JSON.stringify({
+      title: 'Timed Practice',
+      classId: classes.a,
+      questions: [
+        { id: 'timed', prompt: 'Answer', type: 'short_answer', answer: 'Correct' },
+      ],
+    }),
+  })
+  const timeoutStart = await request(
+    `/api/student/practice-quizzes/${timeoutQuiz.body.practiceQuiz.id}/attempts/start`,
+    users.studentA,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+  await database.collection('practice_quiz_attempts').updateOne(
+    { id: timeoutStart.body.attempt.id },
+    { $set: { started_at: new Date(Date.now() - 11 * 60 * 1000).toISOString() } },
+  )
+  const timedOut = await request(
+    `/api/student/practice-quizzes/${timeoutQuiz.body.practiceQuiz.id}/attempts`,
+    users.studentA,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        attemptId: timeoutStart.body.attempt.id,
+        answers: { timed: 'Correct' },
+      }),
+    },
+  )
+  assert.equal(timedOut.body.timedOut, true)
+  assert.equal(timedOut.body.score, 0)
+  assert.equal(timedOut.body.passed, false)
+
+  const facultyReports = await request(
+    `/api/faculty/classes/${classes.a}/quiz-attempts`,
+    users.facultyA,
+  )
+  assert.equal(facultyReports.status, 200)
+  assert.doesNotMatch(JSON.stringify(facultyReports.body), /My Private Review/)
+})
+
+test('quiz rules enforce question limits, scoring, passing, and retakes', async () => {
+  const classId = 'quiz-rules-class'
+  await database.collection('classes').insertOne({
+    id: classId,
+    _id: classId,
+    class_name: 'Quiz Rules',
+    subject: 'Computer Science',
+    subject_code: 'CS-QZ',
+    status: 'Published',
+    faculty_id: users.facultyA.id,
+  })
+  await database.collection('enrollments').insertOne({
+    id: 'quiz-rules-enrollment',
+    class_id: classId,
+    student_id: users.studentA.id,
+    status: 'Active',
+  })
+
+  const tooManyQuestions = await request('/api/learning/quizzes', users.facultyA, {
+    method: 'POST',
+    body: JSON.stringify({
+      classId,
+      title: 'Too many questions',
+      questions: Array.from({ length: 21 }, (_, index) => ({
+        id: `q-${index}`,
+        prompt: `Question ${index + 1}`,
+        answer: 0,
+      })),
+    }),
+  })
+  assert.equal(tooManyQuestions.status, 400)
+
+  const created = await request('/api/learning/quizzes', users.facultyA, {
+    method: 'POST',
+    body: JSON.stringify({
+      classId,
+      title: 'Retake Rules Quiz',
+      timeLimitMinutes: 45,
+      passing: 30,
+      questions: [
+        {
+          id: 'one',
+          prompt: 'Choose the correct answer.',
+          type: 'multiple_choice',
+          options: ['Incorrect', 'Correct'],
+          answer: 1,
+        },
+      ],
+    }),
+  })
+  assert.equal(created.status, 201)
+  assert.equal(created.body.quiz.time_limit_minutes, 10)
+  assert.equal(created.body.quiz.passing, 75)
+  const quizId = created.body.quiz.id
+
+  const studentQuiz = await request(`/api/learning/quizzes/${quizId}`, users.studentA)
+  assert.equal(studentQuiz.status, 200)
+  assert.doesNotMatch(studentQuiz.body.quiz.questions_json, /"answer"/)
+
+  const failedStart = await request(
+    `/api/learning/quizzes/${quizId}/attempts/start`,
+    users.studentA,
+    { method: 'POST' },
+  )
+  assert.equal(failedStart.status, 201)
+  const failed = await request(
+    `/api/learning/quizzes/${quizId}/attempts`,
+    users.studentA,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        attemptId: failedStart.body.attemptId,
+        answers: { one: 0 },
+      }),
+    },
+  )
+  assert.equal(failed.status, 201)
+  assert.equal(failed.body.score, 0)
+  assert.equal(failed.body.passed, false)
+
+  const timedAttempt = await request(
+    `/api/learning/quizzes/${quizId}/attempts/start`,
+    users.studentA,
+    { method: 'POST' },
+  )
+  await database.collection('quiz_attempts').updateOne(
+    { id: timedAttempt.body.attemptId },
+    { $set: { started_at: new Date(Date.now() - 11 * 60 * 1000).toISOString() } },
+  )
+  const timedOut = await request(
+    `/api/learning/quizzes/${quizId}/attempts`,
+    users.studentA,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        attemptId: timedAttempt.body.attemptId,
+        answers: { one: 1 },
+      }),
+    },
+  )
+  assert.equal(timedOut.body.passed, false)
+  assert.equal(timedOut.body.attempt.timed_out, true)
+
+  const retakeStart = await request(
+    `/api/learning/quizzes/${quizId}/attempts/start`,
+    users.studentA,
+    { method: 'POST' },
+  )
+  assert.equal(retakeStart.status, 201)
+  const retake = await request(
+    `/api/learning/quizzes/${quizId}/attempts`,
+    users.studentA,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        attemptId: retakeStart.body.attemptId,
+        answers: { one: 1 },
+      }),
+    },
+  )
+  assert.equal(retake.status, 201)
+  assert.equal(retake.body.score, 100)
+  assert.equal(retake.body.passed, true)
+
+  const afterPassing = await request(
+    `/api/learning/quizzes/${quizId}/attempts`,
+    users.studentA,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        attemptId: retakeStart.body.attemptId,
+        answers: { one: 0 },
+      }),
+    },
+  )
+  assert.equal(afterPassing.status, 409)
+
+  await database.collection('quiz_attempts').deleteMany({ quiz_id: quizId })
+  await database.collection('quizzes').deleteOne({ id: quizId })
+  await database.collection('enrollments').deleteOne({ id: 'quiz-rules-enrollment' })
+  await database.collection('classes').deleteOne({ id: classId })
+})
+
+test('students cannot access the next lesson or quiz before passing the prior quiz', async () => {
+  const classId = 'sequential-learning-class'
+  const slideIds = ['sequential-topic-1', 'sequential-topic-2']
+  const quizIds = ['sequential-quiz-1', 'sequential-quiz-2']
+  await database.collection('classes').insertOne({
+    id: classId,
+    _id: classId,
+    class_name: 'Sequential Learning',
+    subject: 'Computer Science',
+    subject_code: 'CS-SEQ',
+    status: 'Published',
+    faculty_id: users.facultyA.id,
+  })
+  await database.collection('enrollments').insertOne({
+    id: 'sequential-enrollment',
+    class_id: classId,
+    student_id: users.studentA.id,
+    status: 'Active',
+  })
+  await database.collection('slides').insertMany(
+    slideIds.map((id, index) => ({
+      id,
+      _id: id,
+      class_id: classId,
+      title: `Topic ${index + 1}`,
+      status: 'Published',
+      content_json: JSON.stringify([{ text: `Content ${index + 1}` }]),
+      created_date: `2026-01-0${index + 1}T00:00:00.000Z`,
+    })),
+  )
+  await database.collection('quizzes').insertMany(
+    quizIds.map((id, index) => ({
+      id,
+      _id: id,
+      class_id: classId,
+      title: `Quiz ${index + 1}`,
+      quiz_title: `Quiz ${index + 1}`,
+      status: 'Published',
+      passing: 75,
+      time_limit_minutes: 10,
+      questions_json: JSON.stringify([
+        {
+          id: `question-${index + 1}`,
+          prompt: 'Choose the correct answer.',
+          options: ['No', 'Yes'],
+          answer: 1,
+        },
+      ]),
+      created_date: `2026-01-0${index + 1}T00:00:00.000Z`,
+    })),
+  )
+
+  const firstLesson = await request(
+    `/api/learning/slides/${slideIds[0]}`,
+    users.studentA,
+  )
+  const lockedLesson = await request(
+    `/api/learning/slides/${slideIds[1]}`,
+    users.studentA,
+  )
+  const lockedQuiz = await request(
+    `/api/learning/quizzes/${quizIds[1]}`,
+    users.studentA,
+  )
+  assert.equal(firstLesson.status, 200)
+  assert.equal(lockedLesson.status, 403)
+  assert.equal(lockedQuiz.status, 403)
+
+  const firstQuizStart = await request(
+    `/api/learning/quizzes/${quizIds[0]}/attempts/start`,
+    users.studentA,
+    { method: 'POST' },
+  )
+  const passedAttempt = await request(
+    `/api/learning/quizzes/${quizIds[0]}/attempts`,
+    users.studentA,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        attemptId: firstQuizStart.body.attemptId,
+        answers: { 'question-1': 1 },
+      }),
+    },
+  )
+  assert.equal(passedAttempt.body.passed, true)
+  assert.equal(
+    (await request(`/api/learning/slides/${slideIds[1]}`, users.studentA)).status,
+    200,
+  )
+  assert.equal(
+    (await request(`/api/learning/quizzes/${quizIds[1]}`, users.studentA)).status,
+    200,
+  )
+
+  await database.collection('quiz_attempts').deleteMany({ quiz_id: { $in: quizIds } })
+  await database.collection('quizzes').deleteMany({ id: { $in: quizIds } })
+  await database.collection('slides').deleteMany({ id: { $in: slideIds } })
+  await database.collection('enrollments').deleteOne({ id: 'sequential-enrollment' })
+  await database.collection('classes').deleteOne({ id: classId })
+})
+
 test('faculty dashboard and all learning lists are scoped to owned classes', async () => {
   const dashboard = await request('/api/faculty/dashboard', users.facultyA)
   assert.equal(dashboard.status, 200)
@@ -972,12 +1586,18 @@ test('students can only answer teacher quizzes and never receive answer keys', a
   })
   assert.equal(createAttempt.status, 403)
 
+  const quizAttemptStart = await request(
+    '/api/learning/quizzes/quiz-a-published/attempts/start',
+    users.studentA,
+    { method: 'POST' },
+  )
   const submission = await request(
     '/api/learning/quizzes/quiz-a-published/attempts',
     users.studentA,
     {
       method: 'POST',
       body: JSON.stringify({
+        attemptId: quizAttemptStart.body.attemptId,
         answers: {
           choice: 1,
           multiple: [2, 0],
@@ -999,13 +1619,14 @@ test('students can only answer teacher quizzes and never receive answer keys', a
     (item) => item.id === 'quiz-a-published',
   )
   assert.equal(studentQuizAfterAttempt.attemptsUsed, 1)
-  assert.equal(studentQuizAfterAttempt.bestScore, null)
+  assert.equal(studentQuizAfterAttempt.bestScore, 100)
+  assert.equal(studentQuizAfterAttempt.passed, true)
   assert.equal(studentDashboardAfterAttempt.body.attempts.length, 1)
   assert.equal(
     studentDashboardAfterAttempt.body.attempts[0].quizId,
     'quiz-a-published',
   )
-  assert.equal(studentDashboardAfterAttempt.body.attempts[0].passed, false)
+  assert.equal(studentDashboardAfterAttempt.body.attempts[0].passed, true)
 
   const facultyScores = await request(
     `/api/faculty/classes/${classes.a}/quiz-attempts`,
@@ -1038,13 +1659,16 @@ test('students can only answer teacher quizzes and never receive answer keys', a
     users.studentA,
     {
       method: 'POST',
-      body: JSON.stringify({ answers: { choice: 0, multiple: [], short: '', dropdown: '1' } }),
+      body: JSON.stringify({
+        attemptId: quizAttemptStart.body.attemptId,
+        answers: { choice: 0, multiple: [], short: '', dropdown: '1' },
+      }),
     },
   )
   assert.equal(secondAttempt.status, 409)
   assert.equal(
     secondAttempt.body.message,
-    'You already attempted this quiz.',
+    'You have already passed this quiz.',
   )
 
   assert.equal(
@@ -1308,6 +1932,19 @@ test('role guards reject unauthenticated and wrong-role requests', async () => {
 })
 
 test('search and notifications never return global class, quiz, or student data', async () => {
+  await database.collection('slides').insertOne({
+    id: 'searchable-topic',
+    _id: 'searchable-topic',
+    class_id: classes.a,
+    title: 'Searchable Topic Mercury',
+    status: 'Published',
+    content_json: JSON.stringify([{ text: 'Topic body' }]),
+  })
+  const topicSearch = await request('/api/search?q=Mercury', users.studentA)
+  assert.equal(topicSearch.status, 200)
+  assert.ok(topicSearch.body.results.some((item) => item.id === 'searchable-topic'))
+  await database.collection('slides').deleteOne({ id: 'searchable-topic' })
+
   const facultySearch = await request('/api/search?q=Student', users.facultyA)
   assert.equal(facultySearch.status, 200)
   assert.deepEqual(

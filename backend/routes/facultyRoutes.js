@@ -45,8 +45,38 @@ router.get('/dashboard', requireAuth, requireRole('Faculty'), async (req, res) =
       .toArray()
     const attempts = await database
       .collection('quiz_attempts')
-      .find({ quiz_id: { $in: quizzes.map((quiz) => quiz.id) } })
+      .find({
+        quiz_id: { $in: quizzes.map((quiz) => quiz.id) },
+        status: { $ne: 'In Progress' },
+      })
       .toArray()
+    const attemptRows = await Promise.all(
+      attempts.map(async (attempt) => {
+        const quiz = quizzes.find((item) => item.id === attempt.quiz_id)
+        const student = await database
+          .collection('users')
+          .findOne({ id: attempt.student_id })
+        const classRecord = classes.find((item) => item.id === attempt.class_id)
+        if (!quiz || !student || !classRecord) return null
+        return {
+          id: attempt.id,
+          quizId: quiz.id,
+          quizTitle: quiz.quiz_title || quiz.title,
+          studentId: student.id,
+          studentName: student.full_name,
+          username: student.username,
+          classId: classRecord.id,
+          className: classRecord.class_name,
+          subjectCode: classRecord.subject_code,
+          score: attempt.score,
+          passed: Boolean(attempt.passed),
+          correctCount: attempt.correct_count,
+          questionCount: attempt.question_count,
+          passing: 75,
+          submittedAt: attempt.submitted_at,
+        }
+      }),
+    )
 
     const teachers = await database
       .collection('users')
@@ -154,6 +184,7 @@ router.get('/dashboard', requireAuth, requireRole('Faculty'), async (req, res) =
       slides: slideRows.map(mapSlide),
       classwork: classworkRows.map(mapClasswork),
       students: [...studentsById.values()],
+      attempts: attemptRows.filter(Boolean),
       activity: activity.map(mapActivity),
       syncedAt: new Date().toISOString(),
     })
@@ -214,7 +245,10 @@ router.get(
         .toArray()
       const attempts = await database
         .collection('quiz_attempts')
-        .find({ quiz_id: { $in: quizzes.map((quiz) => quiz.id) } })
+        .find({
+          quiz_id: { $in: quizzes.map((quiz) => quiz.id) },
+          status: { $ne: 'In Progress' },
+        })
         .toArray()
       const rows = []
       for (const attempt of attempts) {

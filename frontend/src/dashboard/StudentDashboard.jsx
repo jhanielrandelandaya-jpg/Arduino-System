@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Link,
   Navigate,
@@ -26,6 +26,7 @@ import { useToast } from '../context/toast.js'
 import { useLearningData } from '../hooks/useLearningData.js'
 import ClassroomWorkspace from './ClassroomWorkspace.jsx'
 import StudentAttachmentPreview from './StudentAttachmentPreview.jsx'
+import StudentPracticeQuizzes from './StudentPracticeQuizzes.jsx'
 
 const NOTES_KEY = 'learnspace_student_notes'
 
@@ -94,41 +95,6 @@ const shuffleQuestionsForStudent = (questionList, studentId, quizId) => {
   return shuffled
 }
 
-const shuffleOptionsForStudent = (questionList, studentId, quizId) => {
-  if (!Array.isArray(questionList) || !studentId) {
-    return questionList
-  }
-
-  return questionList.map((question) => {
-    if (
-      !question ||
-      typeof question !== 'object' ||
-      Array.isArray(question) ||
-      !Array.isArray(question.options) ||
-      question.options.length < 2
-    ) {
-      return question
-    }
-
-    const random = createSeededRandom(
-      hashSeed(`${studentId}:${quizId}:${question.id}:options`),
-    )
-    const optionOrder = question.options.map((_, index) => index)
-    for (let index = optionOrder.length - 1; index > 0; index -= 1) {
-      const swapIndex = Math.floor(random() * (index + 1))
-      const current = optionOrder[index]
-      optionOrder[index] = optionOrder[swapIndex]
-      optionOrder[swapIndex] = current
-    }
-
-    return {
-      ...question,
-      options: optionOrder.map((optionIndex) => question.options[optionIndex]),
-      optionOrder,
-    }
-  })
-}
-
 const sharedQuizForStudent = (quiz, progress = {}, studentId = '') => {
   return {
     ...quiz,
@@ -141,15 +107,20 @@ const sharedQuizForStudent = (quiz, progress = {}, studentId = '') => {
       progress.status ||
       (quiz.status === 'Draft'
         ? 'Draft'
-        : quiz.attemptsUsed > 0
-          ? 'Completed'
-          : 'Available'),
-    attemptsAllowed: 1,
+        : quiz.locked
+          ? 'Locked'
+          : quiz.passed
+          ? 'Passed'
+          : quiz.attemptsUsed > 0
+            ? 'Retake available'
+            : 'Available'),
+    attemptsAllowed: null,
     attemptsUsed: progress.attemptsUsed ?? quiz.attemptsUsed ?? 0,
     bestScore: progress.bestScore ?? quiz.bestScore ?? null,
+    passed: progress.passed ?? quiz.passed ?? false,
     due: quiz.dueDate || 'No deadline',
-    questionList: shuffleOptionsForStudent(
-      shuffleQuestionsForStudent(quiz.questionList || [], studentId, quiz.id),
+    questionList: shuffleQuestionsForStudent(
+      quiz.questionList || [],
       studentId,
       quiz.id,
     ),
@@ -198,6 +169,7 @@ function StudentWorkspace({ user, onLogout, onUserUpdate }) {
     slides,
     classwork,
     quizAttempts,
+    practiceQuizzes,
     activity,
     enrollClass,
     getClassAnnouncements,
@@ -208,7 +180,16 @@ function StudentWorkspace({ user, onLogout, onUserUpdate }) {
     downloadClassworkAttachment,
     previewClassworkAttachment,
     downloadSubmissionFile,
+    startQuizAttempt,
     submitQuizAttempt,
+    createPracticeQuiz,
+    deletePracticeQuiz,
+    startPracticeQuizAttempt,
+    submitPracticeQuizAttempt,
+    getStudentNotes,
+    createStudentNote,
+    updateStudentNote,
+    deleteStudentNote,
     downloadSlideFile,
     loadSlideFilePreview,
     syncedAt,
@@ -244,7 +225,7 @@ function StudentWorkspace({ user, onLogout, onUserUpdate }) {
   )
 
   const handleQuizComplete = async (quiz, answers) => {
-    const result = await submitQuizAttempt(quiz.id, answers)
+    const result = await submitQuizAttempt(quiz.id, quiz.attemptId, answers)
 
     setQuizProgress((current) => {
       const previous = current[quiz.id] || {}
@@ -253,12 +234,15 @@ function StudentWorkspace({ user, onLogout, onUserUpdate }) {
         [quiz.id]: {
           attemptsUsed: (previous.attemptsUsed || quiz.attemptsUsed || 0) + 1,
           bestScore: Math.max(previous.bestScore || 0, result.score),
-          status: 'Completed',
+          passed: result.passed,
+          status: result.passed ? 'Passed' : 'Retake available',
         },
       }
     })
     return result
   }
+
+  const handleQuizStart = (quiz) => startQuizAttempt(quiz.id)
 
   return (
     <DashboardLayout
@@ -310,6 +294,7 @@ function StudentWorkspace({ user, onLogout, onUserUpdate }) {
               getPeople={getClassPeople}
               onDownloadFile={downloadSlideFile}
               onPreviewFile={loadSlideFilePreview}
+              onQuizStart={handleQuizStart}
               onQuizComplete={handleQuizComplete}
             />
           }
@@ -334,8 +319,33 @@ function StudentWorkspace({ user, onLogout, onUserUpdate }) {
           path="presentations/*"
           element={<Navigate to="/student/lessons" replace />}
         />
-        <Route path="notes" element={<StudentNotes userId={user.id} slides={slides} />} />
+        <Route
+          path="notes"
+          element={
+            <StudentNotes
+              userId={user.id}
+              slides={slides}
+              getNotes={getStudentNotes}
+              createNoteRequest={createStudentNote}
+              updateNoteRequest={updateStudentNote}
+              deleteNoteRequest={deleteStudentNote}
+            />
+          }
+        />
         <Route path="quizzes" element={<Navigate to="subjects" replace />} />
+        <Route
+          path="practice-quizzes"
+          element={
+            <StudentPracticeQuizzes
+              classes={classes}
+              practiceQuizzes={practiceQuizzes}
+              onCreate={createPracticeQuiz}
+              onDelete={deletePracticeQuiz}
+              onStart={startPracticeQuizAttempt}
+              onSubmit={submitPracticeQuizAttempt}
+            />
+          }
+        />
         <Route path="results" element={<StudentResults results={results} />} />
         <Route
           path="progress"
@@ -1019,6 +1029,7 @@ function StudentSubjects({
   downloadSubmissionFile,
   onDownloadFile,
   onPreviewFile,
+  onQuizStart,
   onQuizComplete,
 }) {
   const notify = useToast()
@@ -1090,6 +1101,7 @@ function StudentSubjects({
         studentQuizContent={
           <StudentClassQuizzes
             quizzes={classQuizzes}
+            onQuizStart={onQuizStart}
             onQuizComplete={handleQuizComplete}
           />
         }
@@ -1260,6 +1272,7 @@ function StudentSubjects({
               {expandedClassId === subject.id && (
                 <StudentClassQuizzes
                   quizzes={quizzes.filter((quiz) => quiz.classId === subject.id)}
+                  onQuizStart={onQuizStart}
                   onQuizComplete={handleQuizComplete}
                 />
               )}
@@ -1306,32 +1319,47 @@ function StudentLessons({
   const slideStatuses = {}
   Object.entries(slidesByClass).forEach(([classId, classSlides]) => {
     const sortedSlides = classSlides.sort(
-      (a, b) => new Date(a.createdDate) - new Date(b.createdDate)
+      (left, right) => {
+        const hasOrder = classSlides.every(
+          (slide) => Number.isInteger(slide.orderIndex),
+        )
+        return hasOrder
+          ? left.orderIndex - right.orderIndex
+          : new Date(left.createdDate) - new Date(right.createdDate)
+      },
     )
     const classQuizzes = quizzes
       .filter((q) => q.classId === classId && q.status !== 'Draft')
       .sort((a, b) => new Date(a.createdDate) - new Date(b.createdDate))
 
-    let foundLocked = false
-    sortedSlides.forEach((slide, index) => {
-      if (foundLocked) {
-        slideStatuses[slide.id] = 'locked'
-        return
+    const quizzesBySlide = new Map(
+      sortedSlides.map((slide) => [slide.id, []]),
+    )
+    const assignedQuizIds = new Set()
+    classQuizzes.forEach((quiz) => {
+      if (quiz.topicId && quizzesBySlide.has(quiz.topicId)) {
+        quizzesBySlide.get(quiz.topicId).push(quiz)
+        assignedQuizIds.add(quiz.id)
       }
+    })
+    const unassignedSlides = sortedSlides.filter(
+      (slide) => quizzesBySlide.get(slide.id).length === 0,
+    )
+    classQuizzes
+      .filter((quiz) => !assignedQuizIds.has(quiz.id))
+      .forEach((quiz, index) => {
+        const slide = unassignedSlides[index]
+        if (slide) quizzesBySlide.get(slide.id).push(quiz)
+      })
 
-      const prerequisiteQuiz = index > 0 ? classQuizzes[index - 1] : null
-
-      if (index > 0 && prerequisiteQuiz && !passedQuizIds.has(prerequisiteQuiz.id)) {
-        slideStatuses[slide.id] = 'locked'
-        foundLocked = true
-      } else {
-        const ownQuiz = classQuizzes[index]
-        if (ownQuiz && passedQuizIds.has(ownQuiz.id)) {
-          slideStatuses[slide.id] = 'completed'
-        } else {
-          slideStatuses[slide.id] = 'current'
-        }
-      }
+    sortedSlides.forEach((slide) => {
+      const topicQuizzes = quizzesBySlide.get(slide.id)
+      slideStatuses[slide.id] = slide.locked
+        ? 'locked'
+        : topicQuizzes.length > 0 &&
+            topicQuizzes.every((quiz) => passedQuizIds.has(quiz.id))
+          ? 'completed'
+          : 'current'
     })
   })
 
@@ -1643,52 +1671,164 @@ function StudentLessons({
   )
 }
 
-function StudentNotes({ userId, slides }) {
+function StudentNotes({
+  userId,
+  slides,
+  getNotes,
+  createNoteRequest,
+  updateNoteRequest,
+  deleteNoteRequest,
+}) {
   const notify = useToast()
-  const [notes, setNotes] = useState(() => loadNotes(userId))
-  const [selectedId, setSelectedId] = useState(
-    () => loadNotes(userId)[0]?.id || null,
-  )
+  const [notes, setNotes] = useState([])
+  const [selectedId, setSelectedId] = useState(null)
+  const [notesError, setNotesError] = useState('')
+  const [savingNote, setSavingNote] = useState(false)
+  const [notesLoaded, setNotesLoaded] = useState(false)
+  const saveTimers = useRef(new Map())
+  const pendingUpdates = useRef(new Map())
+  const notesLoadPromise = useRef(null)
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(`${NOTES_KEY}_${userId}`, JSON.stringify(notes))
-    } catch {
-      // Notes still work for this session when storage is unavailable.
+    let active = true
+    if (!notesLoadPromise.current) {
+      notesLoadPromise.current = (async () => {
+        const remoteNotes = await getNotes()
+        let nextNotes = remoteNotes
+        const legacyNotes = loadNotes(userId)
+        if (legacyNotes.length > 0) {
+          for (const note of legacyNotes) {
+            const topicId = note.topicId
+            if (!topicId) {
+              throw new Error(
+                'A saved browser note is missing its lesson. Keep its browser data and link it to a lesson before migrating.',
+              )
+            }
+            const created = await createNoteRequest({
+              topicId,
+              title: note.title,
+              body: note.body,
+            })
+            nextNotes = [created, ...nextNotes]
+          }
+          window.localStorage.removeItem(`${NOTES_KEY}_${userId}`)
+        }
+        return nextNotes
+      })()
     }
-  }, [notes, userId])
+    notesLoadPromise.current
+      .then((loadedNotes) => {
+        if (active) {
+          setNotes(loadedNotes)
+          setSelectedId(loadedNotes[0]?.id || null)
+          setNotesLoaded(true)
+        }
+      })
+      .catch((loadError) => {
+        if (active) {
+          setNotesError(loadError.message || 'Could not load your notes.')
+          setNotesLoaded(true)
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [createNoteRequest, getNotes, userId])
 
   const selected = notes.find((note) => note.id === selectedId) || notes[0]
 
   const updateSelected = (patch) => {
     if (!selected) return
+    setNotesError('')
+    const noteId = selected.id
+    const queued = { ...pendingUpdates.current.get(noteId), ...patch }
+    pendingUpdates.current.set(noteId, queued)
     setNotes((current) =>
       current.map((note) =>
-        note.id === selected.id
+        note.id === noteId
           ? { ...note, ...patch, updatedAt: new Date().toISOString() }
           : note,
       ),
     )
+    window.clearTimeout(saveTimers.current.get(noteId))
+    const timer = window.setTimeout(async () => {
+      const updates = pendingUpdates.current.get(noteId)
+      if (!updates) return
+      pendingUpdates.current.delete(noteId)
+      saveTimers.current.delete(noteId)
+      setSavingNote(true)
+      try {
+        const updated = await updateNoteRequest(noteId, updates)
+        setNotes((current) =>
+          current.map((note) => (note.id === updated.id ? updated : note)),
+        )
+      } catch (saveError) {
+        setNotesError(saveError.message || 'Could not save your note.')
+      } finally {
+        setSavingNote(false)
+      }
+    }, 500)
+    saveTimers.current.set(noteId, timer)
   }
 
-  const createNote = () => {
-    const note = {
-      id: `note-${Date.now()}`,
-      topicId: slides[0]?.id,
-      title: 'Untitled note',
-      body: '',
-      updatedAt: new Date().toISOString(),
+  const createNote = async () => {
+    const topicId = slides[0]?.id
+    if (!topicId) {
+      setNotesError('Join a class with a published lesson before creating a topic note.')
+      return
     }
-    setNotes((current) => [note, ...current])
-    setSelectedId(note.id)
-    notify('New note created. Start writing your ideas.')
+    try {
+      const note = await createNoteRequest({
+        topicId,
+        title: 'Untitled note',
+        body: '',
+      })
+      setNotes((current) => [note, ...current])
+      setSelectedId(note.id)
+      notify('New note created.')
+    } catch (createError) {
+      setNotesError(createError.message || 'Could not create your note.')
+    }
   }
 
-  const deleteNote = () => {
+  const deleteNote = async () => {
     if (!selected) return
-    setNotes((current) => current.filter((note) => note.id !== selected.id))
-    setSelectedId(notes.find((note) => note.id !== selected.id)?.id || null)
-    notify('Note deleted.', 'error')
+    try {
+      window.clearTimeout(saveTimers.current.get(selected.id))
+      saveTimers.current.delete(selected.id)
+      pendingUpdates.current.delete(selected.id)
+      await deleteNoteRequest(selected.id)
+      const remainingNotes = notes.filter((note) => note.id !== selected.id)
+      setNotes(remainingNotes)
+      setSelectedId(remainingNotes[0]?.id || null)
+      notify('Note deleted.')
+    } catch (deleteError) {
+      setNotesError(deleteError.message || 'Could not delete your note.')
+    }
+  }
+
+  const saveSelectedNow = async () => {
+    if (!selected) return
+    window.clearTimeout(saveTimers.current.get(selected.id))
+    saveTimers.current.delete(selected.id)
+    const updates = pendingUpdates.current.get(selected.id) || {
+      title: selected.title,
+      body: selected.body,
+      topicId: selected.topicId,
+    }
+    pendingUpdates.current.delete(selected.id)
+    setSavingNote(true)
+    try {
+      const updated = await updateNoteRequest(selected.id, updates)
+      setNotes((current) =>
+        current.map((note) => (note.id === updated.id ? updated : note)),
+      )
+      notify('Note saved to your account.')
+    } catch (saveError) {
+      setNotesError(saveError.message || 'Could not save your note.')
+    } finally {
+      setSavingNote(false)
+    }
   }
 
   return (
@@ -1696,7 +1836,7 @@ function StudentNotes({ userId, slides }) {
       <PageHeader
         eyebrow="My notes"
         title="Personal study notes"
-        description="Capture important ideas per topic. Notes are saved in this browser for now."
+        description="Capture important ideas per topic. Your notes are saved to your account."
         actions={
           <button type="button" className="lms-btn lms-btn-primary" onClick={createNote}>
             <Icon name="plus" size={16} />
@@ -1705,7 +1845,11 @@ function StudentNotes({ userId, slides }) {
         }
       />
 
-      {notes.length === 0 ? (
+      {notesError && <p className="lms-inline-error" role="alert">{notesError}</p>}
+
+      {!notesLoaded ? (
+        <div className="lms-card lms-card-pad">Loading your notes...</div>
+      ) : notes.length === 0 ? (
         <div className="lms-card">
           <EmptyState
             icon="notes"
@@ -1757,6 +1901,7 @@ function StudentNotes({ userId, slides }) {
                   onChange={(event) =>
                     updateSelected({ title: event.target.value })
                   }
+                  onBlur={saveSelectedNow}
                   aria-label="Note title"
                 />
                 <button
@@ -1777,6 +1922,7 @@ function StudentNotes({ userId, slides }) {
                   onChange={(event) =>
                     updateSelected({ topicId: event.target.value })
                   }
+                  onBlur={saveSelectedNow}
                   aria-label="Link note to topic"
                 >
                   {slides.map((lesson) => (
@@ -1790,6 +1936,7 @@ function StudentNotes({ userId, slides }) {
                   onChange={(event) =>
                     updateSelected({ body: event.target.value })
                   }
+                  onBlur={saveSelectedNow}
                   placeholder="Write your notes here..."
                   aria-label="Note content"
                 />
@@ -1797,12 +1944,14 @@ function StudentNotes({ userId, slides }) {
 
               <div className="lms-note-editor-foot">
                 <span>
-                  Last edited {formatDate(selected.updatedAt)} · saved locally
+                  Last edited {formatDate(selected.updatedAt)} ·{' '}
+                  {savingNote ? 'saving...' : 'saved to your account'}
                 </span>
                 <button
                   type="button"
                   className="lms-btn lms-btn-primary lms-btn-sm"
-                  onClick={() => notify('Note saved successfully.')}
+                  onClick={saveSelectedNow}
+                  disabled={savingNote}
                 >
                   <Icon name="check" size={14} />
                   Save note
@@ -1816,8 +1965,22 @@ function StudentNotes({ userId, slides }) {
   )
 }
 
-function StudentClassQuizzes({ quizzes, onQuizComplete }) {
+function StudentClassQuizzes({ quizzes, onQuizStart, onQuizComplete }) {
+  const notify = useToast()
   const [activeQuiz, setActiveQuiz] = useState(null)
+  const [startingQuizId, setStartingQuizId] = useState('')
+
+  const startQuiz = async (quiz) => {
+    setStartingQuizId(quiz.id)
+    try {
+      const attempt = await onQuizStart(quiz)
+      setActiveQuiz({ ...quiz, ...attempt })
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setStartingQuizId('')
+    }
+  }
 
   const filtered = quizzes
 
@@ -1835,12 +1998,9 @@ function StudentClassQuizzes({ quizzes, onQuizComplete }) {
       ) : (
         <div className="lms-quiz-grid">
           {filtered.map((quiz) => {
-          const attemptsLeft =
-            quiz.attemptsAllowed - quiz.attemptsUsed
           const isDraft = quiz.status === 'Draft'
           const hasQuestions = quiz.questionList?.length > 0
-          const isLocked =
-            quiz.status === 'Completed' || attemptsLeft <= 0 || !hasQuestions
+          const isLocked = quiz.passed || quiz.locked || !hasQuestions
 
             return (
             <article className="lms-quiz-card" key={quiz.id}>
@@ -1850,9 +2010,10 @@ function StudentClassQuizzes({ quizzes, onQuizComplete }) {
                 </span>
                 <Badge
                   tone={
-                    quiz.status === 'Completed'
+                    quiz.passed || quiz.status === 'Passed'
                       ? 'success'
                       : quiz.status === 'Retake available' ||
+                          quiz.status === 'Locked' ||
                           quiz.status === 'Draft'
                         ? 'warning'
                         : 'info'
@@ -1883,7 +2044,7 @@ function StudentClassQuizzes({ quizzes, onQuizComplete }) {
                 <div>
                   <span>Attempts</span>
                   <strong>
-                    {quiz.attemptsUsed}/{quiz.attemptsAllowed}
+                    {quiz.attemptsUsed} / Unlimited
                   </strong>
                 </div>
                 <div>
@@ -1900,14 +2061,14 @@ function StudentClassQuizzes({ quizzes, onQuizComplete }) {
                     : !hasQuestions
                       ? 'Questions coming soon'
                       : isLocked
-                        ? 'No attempts remaining'
-                        : `${attemptsLeft} attempt${attemptsLeft === 1 ? '' : 's'} left`}
+                          ? quiz.passed ? 'Quiz passed' : 'Complete the previous quiz first'
+                          : 'Retakes allowed until passed'}
                 </span>
                 <button
                   type="button"
                   className="lms-btn lms-btn-primary lms-btn-sm"
-                  disabled={isLocked}
-                  onClick={() => setActiveQuiz(quiz)}
+                  disabled={isLocked || startingQuizId === quiz.id}
+                  onClick={() => startQuiz(quiz)}
                 >
                   <Icon name="play" size={13} />
                   {isDraft
@@ -1916,7 +2077,9 @@ function StudentClassQuizzes({ quizzes, onQuizComplete }) {
                       ? 'Not ready'
                       : quiz.status === 'Retake available'
                         ? 'Retake'
-                        : 'Start quiz'}
+                        : startingQuizId === quiz.id
+                          ? 'Starting...'
+                          : 'Start quiz'}
                 </button>
               </div>
             </article>
@@ -1942,26 +2105,21 @@ function QuizPlayer({ quiz, onClose, onComplete }) {
   const [submitted, setSubmitted] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
-  const [remaining, setRemaining] = useState(Number(quiz.timeLimit) * 60)
+  const [remaining, setRemaining] = useState(() =>
+    Math.max(
+      0,
+      Number(quiz.timeLimit) * 60 -
+        Math.floor((Date.now() - Date.parse(quiz.startedAt)) / 1000),
+    ),
+  )
   const questionList = quiz.questionList || []
-
-  useEffect(() => {
-    if (submitted || remaining <= 0) {
-      return undefined
-    }
-
-    const timeout = window.setTimeout(
-      () => setRemaining((value) => Math.max(0, value - 1)),
-      1000,
-    )
-    return () => window.clearTimeout(timeout)
-  }, [remaining, submitted])
 
   const answeredCount = Object.keys(answers).length
   const minutes = Math.floor(remaining / 60)
   const seconds = String(remaining % 60).padStart(2, '0')
 
-  const handleSubmit = async () => {
+  const handleSubmit = useCallback(async () => {
+    if (submitted || submitting) return
     setSubmitting(true)
     try {
       const submission = await onComplete(quiz, answers)
@@ -1972,7 +2130,20 @@ function QuizPlayer({ quiz, onClose, onComplete }) {
     } finally {
       setSubmitting(false)
     }
-  }
+  }, [answers, notify, onComplete, quiz, submitted, submitting])
+
+  useEffect(() => {
+    if (submitted || remaining <= 0) {
+      return undefined
+    }
+
+    const timeout = window.setTimeout(() => {
+      const nextRemaining = Math.max(0, remaining - 1)
+      setRemaining(nextRemaining)
+      if (nextRemaining === 0) handleSubmit()
+    }, 1000)
+    return () => window.clearTimeout(timeout)
+  }, [handleSubmit, remaining, submitted])
 
   return (
     <Modal

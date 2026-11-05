@@ -82,30 +82,39 @@ const mapClass = (row) => ({
 
 const mapQuiz = (row, { includeAnswers = true } = {}) => ({
   id: row.id,
-  quizTitle: row.quiz_title,
-  title: row.quiz_title,
+  quizTitle: row.quiz_title || row.title,
+  title: row.quiz_title || row.title,
   classId: row.class_id,
   subjectId: row.class_id,
+  topicId: row.topic_id || null,
   className: row.class_name,
   subjectCode: row.subject_code,
   dueDate: row.due_date,
   due: row.due_date,
   status: row.status,
-  timeLimit: row.time_limit,
+  timeLimit: 10,
   maxScore: row.max_score,
-  passing: row.passing,
+  passing: 75,
   questions: row.questions,
-  attemptsAllowed: row.attempts_allowed,
-  attempts: row.attempts,
+  attemptsAllowed: row.attempts_allowed ?? null,
+  attempts: row.attempts ?? 0,
   attemptsUsed: row.student_attempts ?? 0,
   bestScore: row.student_best_score ?? null,
+  passed: Boolean(row.student_passed),
+  locked: Boolean(row.student_locked ?? row.locked),
   average: row.average,
+  questions: safeJsonArray(row.questions_json).length || row.questions || 0,
   questionList: safeJsonArray(row.questions_json).map((question) => {
     if (!question || typeof question !== 'object' || Array.isArray(question)) {
       return question
     }
     if (includeAnswers) return question
-    const { answer, correctAnswers, ...studentQuestion } = question
+    const {
+      answer,
+      correctAnswers,
+      correct_answer,
+      ...studentQuestion
+    } = question
     return studentQuestion
   }),
   type: 'Faculty quiz',
@@ -115,19 +124,31 @@ const mapQuiz = (row, { includeAnswers = true } = {}) => ({
   updatedAt: row.updated_at,
 })
 
-const mapSlide = (row) => ({
-  id: row.id,
-  classId: row.class_id,
-  className: row.class_name,
-  subjectCode: row.subject_code,
-  title: row.title,
-  content: safeJsonArray(row.content_json).filter(
+const mapSlide = (row) => {
+  const content = safeJsonArray(row.content_json).filter(
     (item) => item && typeof item === 'object' && !Array.isArray(item),
-  ),
-  status: row.status,
-  createdDate: row.created_date,
-  updatedAt: row.updated_at,
-})
+  )
+  const presentations = safeJsonArray(row.presentation_json)
+  const presentation =
+    presentations.length > 0 ? presentations[presentations.length - 1] : null
+  if (presentation) {
+    if (content.length === 0) content.push({})
+    content[0] = { ...content[0], presentation }
+  }
+  return {
+    id: row.id,
+    classId: row.class_id,
+    className: row.class_name,
+    subjectCode: row.subject_code,
+    title: row.title,
+    orderIndex: Number.isInteger(row.order_index) ? row.order_index : null,
+    content,
+    status: row.status,
+    locked: Boolean(row.locked),
+    createdDate: row.created_date,
+    updatedAt: row.updated_at,
+  }
+}
 
 const mapClasswork = (row) => ({
   id: row.id,

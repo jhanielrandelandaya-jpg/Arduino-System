@@ -20,8 +20,9 @@ used to authorize requests.
 - `GET /api/faculty/dashboard`: classes owned by the current faculty member,
   their slides and quizzes, and students actively enrolled in those classes.
 - `GET /api/student/dashboard`: published classes with an active enrollment,
-  plus only their published slides, quizzes, and classwork. Assignment status
-  and pending-work counts are specific to the authenticated student.
+  plus only their published slides, quizzes, classwork, and the current
+  student's private practice quizzes. Assignment status and pending-work counts
+  are specific to the authenticated student.
 - `POST /api/learning/classes`: creates a class owned by the authenticated
   faculty member and assigns it a random unique 8-character `join_code`.
 - `POST /api/student/enrollments`: joins a published class using its unique
@@ -60,6 +61,16 @@ used to authorize requests.
 - `POST /api/learning/quizzes/:id/attempts`: submits answers for a published
   quiz in an actively enrolled class. Student quiz reads omit answer keys;
   scoring is performed by the server.
+- `POST /api/learning/ai/summaries`: creates a lesson summary for faculty-owned
+  classes. The caller must explicitly consent before lesson text is sent to
+  OpenAI. Generated summaries are returned to the editor and saved only when
+  the faculty member saves the lesson.
+- `/api/student/practice-quizzes`: creates, lists, and deletes student-owned
+  private practice quizzes, and starts/submits their attempts. These quizzes
+  are visible only to their creator and are not included in faculty reports.
+- `/api/student/notes`: creates, lists, updates, and deletes notes owned by the
+  authenticated student. Notes are linked to published lessons in actively
+  enrolled classes and stored in MongoDB.
 - `POST /api/learning/slides/:id/presentation`: faculty-only upload of any file
   type for an owned lesson (maximum 25 MB).
 - `GET /api/learning/slides/:id/presentation`: downloads an attached file for
@@ -68,6 +79,10 @@ used to authorize requests.
   files; other types must be downloaded and opened with a compatible app.
 - `/api/learning` class, quiz, slide, and activity routes apply the same
   ownership or enrollment scope. Students cannot read draft learning content.
+Faculty can set lesson order and link each quiz to a lesson. Older lessons
+without an explicit order retain their creation-date ordering; older quizzes
+without a topic link continue to use their class sequence as a compatibility
+fallback.
 
 Uploaded lesson files, classwork attachments, and student submission files are
 stored on disk under `learningData/slides/`, `learningData/classwork/`, and
@@ -76,10 +91,22 @@ stored on disk under `learningData/slides/`, `learningData/classwork/`, and
 locations. Each upload is limited to 25 MB.
 Faculty quiz questions support multiple choice, dropdown, checkboxes, short
 answer, and paragraph answers.
+Faculty score reports can be printed or exported as native Excel `.xlsx` and
+CSV spreadsheet files.
+
+AI lesson summaries require `OPENAI_API_KEY` in the backend environment. The
+optional `OPENAI_MODEL` setting selects the model and defaults to
+`gpt-4.1-mini`. Never put the API key in frontend code or commit it to source
+control. The summary action sends the lesson title and text to OpenAI only
+after a faculty member checks the consent box and requests generation.
+For local development, copy `backend/.env.example` to `backend/.env`, set
+`OPENAI_API_KEY` in that local file, and restart the backend. Create the key
+from your OpenAI Platform account and ensure the project has API billing or
+credits enabled. Do not send the key in chat or commit the `.env` file.
 
 The learning data is stored in MongoDB collections, including `classes`,
 `enrollments`, `classwork` (`assignment`, `quiz`, and `material`), and
-`submissions`.
+`submissions`, along with private `student_notes` and practice quiz collections.
 
 Run the tests with a development or test MongoDB server available at
 `MONGODB_URI` (or at the default local address). The tests create and drop

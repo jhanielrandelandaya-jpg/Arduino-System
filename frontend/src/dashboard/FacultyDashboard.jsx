@@ -46,6 +46,7 @@ function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
   const {
     classes: subjects,
     quizzes,
+    quizAttempts,
     students,
     slides,
     classwork,
@@ -74,24 +75,44 @@ function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
     uploadSlideFile,
     downloadSlideFile,
     loadSlideFilePreview,
+    generateLessonSummary,
     loading,
     error,
     refresh,
   } = useLearningData({ role: 'Faculty' })
-  const lessons = slides.map((slide) => ({
-    id: slide.id,
-    subjectId: slide.classId,
-    subjectCode: slide.subjectCode,
-    title: slide.title,
-    summary: slide.content[0]?.summary || '',
-    content: slide.content[0]?.text || '',
-    presentation: slide.content[0]?.presentation || null,
-    type: slide.content[0]?.presentation?.fileName
-      ? 'File attachment + text'
-      : 'Text lesson',
-    status: slide.status,
-    updated: slide.updatedAt,
-  }))
+  const lessons = Array.from(
+    slides.reduce((groups, slide) => {
+      const current = groups.get(slide.classId) || []
+      current.push(slide)
+      groups.set(slide.classId, current)
+      return groups
+    }, new Map()).values(),
+  )
+    .flatMap((classSlides) => {
+      const hasOrder = classSlides.every(
+        (slide) => Number.isInteger(slide.orderIndex),
+      )
+      const orderedSlides = [...classSlides].sort((left, right) =>
+        hasOrder
+          ? left.orderIndex - right.orderIndex
+          : new Date(left.createdDate) - new Date(right.createdDate),
+      )
+      return orderedSlides.map((slide, index) => ({
+        id: slide.id,
+        subjectId: slide.classId,
+        subjectCode: slide.subjectCode,
+        orderIndex: index + 1,
+        title: slide.title,
+        summary: slide.content[0]?.summary || '',
+        content: slide.content[0]?.text || '',
+        presentation: slide.content[0]?.presentation || null,
+        type: slide.content[0]?.presentation?.fileName
+          ? 'File attachment + text'
+          : 'Text lesson',
+        status: slide.status,
+        updated: slide.updatedAt,
+      }))
+    })
 
   const saveSubject = async (subject) => {
     const isEditing = subjects.some((item) => item.id === subject.id)
@@ -127,6 +148,7 @@ function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
       pendingLessonIds.has(lesson.id)
     const payload = {
       classId: lesson.subjectId,
+      orderIndex: Number(lesson.orderIndex) - 1,
       title: lesson.title,
       content: [
         {
@@ -186,12 +208,19 @@ function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
 
   const saveQuiz = async (quiz) => {
     const isEditing = quizzes.some((item) => item.id === quiz.id)
+    const payload = {
+      ...quiz,
+      classId: quiz.subjectId,
+      timeLimitMinutes: 10,
+      questionList: quiz.questionList,
+      questions: quiz.questionList,
+    }
 
     try {
       if (isEditing) {
-        await updateQuiz(quiz.id, quiz)
+        await updateQuiz(quiz.id, payload)
       } else {
-        await createQuiz(quiz)
+        await createQuiz(payload)
       }
       notify(
         isEditing
@@ -266,6 +295,7 @@ function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
               onSave={saveLesson}
               onToggleStatus={toggleLessonStatus}
               onPreviewLessonFile={loadSlideFilePreview}
+              onGenerateSummary={generateLessonSummary}
               userId={user.id}
             />
           }
@@ -294,6 +324,7 @@ function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
             <QuizManagement
               quizzes={quizzes}
               subjects={subjects}
+              slides={slides}
               onSave={saveQuiz}
             />
           }
@@ -302,7 +333,12 @@ function FacultyWorkspace({ user, onLogout, onUserUpdate }) {
           path="performance"
           element={<StudentPerformance students={students} subjects={subjects} />}
         />
-        <Route path="reports" element={<FacultyReports subjects={subjects} />} />
+        <Route
+          path="reports"
+          element={
+            <FacultyReports subjects={subjects} quizAttempts={quizAttempts} />
+          }
+        />
         <Route path="*" element={<Navigate to="dashboard" replace />} />
       </Routes>
     </DashboardLayout>
@@ -1239,6 +1275,7 @@ function LessonManagement({
   onSave,
   onToggleStatus,
   onPreviewLessonFile,
+  onGenerateSummary,
   userId,
 }) {
   const navigate = useNavigate()
@@ -1297,9 +1334,16 @@ function LessonManagement({
           <button
             type="button"
             className="lms-btn lms-btn-primary"
-            onClick={() =>
-              setEditing({ subjectId: searchParams.get('classId') || '' })
-            }
+            onClick={() => {
+              const subjectId =
+                searchParams.get('classId') || subjects[0]?.id || ''
+              setEditing({
+                subjectId,
+                orderIndex:
+                  lessons.filter((lesson) => lesson.subjectId === subjectId)
+                    .length + 1,
+              })
+            }}
           >
             <Icon name="plus" size={16} />
             New lesson
@@ -1445,6 +1489,7 @@ function LessonManagement({
         <LessonFormModal
           lesson={editing}
           subjects={subjects}
+          onGenerateSummary={onGenerateSummary}
           onClose={() => setEditing(null)}
           onSave={async (lesson) => {
             await onSave(lesson)
@@ -1470,14 +1515,24 @@ function LessonManagement({
   )
 }
 
-function LessonFormModal({ lesson, subjects, onClose, onSave }) {
+function LessonFormModal({
+  lesson,
+  subjects,
+  onGenerateSummary,
+  onClose,
+  onSave,
+}) {
   const isEditing = Boolean(lesson.id)
   const [saving, setSaving] = useState(false)
+  const [generatingSummary, setGeneratingSummary] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [summaryError, setSummaryError] = useState('')
+  const [summaryConsent, setSummaryConsent] = useState(false)
   const [persistedLessonId, setPersistedLessonId] = useState('')
   const [form, setForm] = useState({
     title: lesson.title || '',
     subjectId: lesson.subjectId || subjects[0]?.id || '',
+    orderIndex: lesson.orderIndex || 1,
     summary: lesson.summary || '',
     content: lesson.content || '',
     presentation: lesson.presentation || null,
@@ -1491,6 +1546,23 @@ function LessonFormModal({ lesson, subjects, onClose, onSave }) {
   const selectedSubject = subjects.find(
     (subject) => subject.id === form.subjectId,
   )
+
+  const generateSummary = async () => {
+    setGeneratingSummary(true)
+    setSummaryError('')
+    try {
+      const summary = await onGenerateSummary(
+        form.subjectId,
+        form.title,
+        form.content,
+      )
+      update('summary', summary)
+    } catch (error) {
+      setSummaryError(error.message || 'Could not generate an AI summary.')
+    } finally {
+      setGeneratingSummary(false)
+    }
+  }
 
   const handleSubmit = async (event) => {
     event.preventDefault()
@@ -1527,7 +1599,7 @@ function LessonFormModal({ lesson, subjects, onClose, onSave }) {
             type="button"
             className="lms-btn lms-btn-secondary"
             onClick={onClose}
-            disabled={saving}
+            disabled={saving || generatingSummary}
           >
             Cancel
           </button>
@@ -1535,7 +1607,7 @@ function LessonFormModal({ lesson, subjects, onClose, onSave }) {
             type="submit"
             form="lesson-form"
             className="lms-btn lms-btn-primary"
-            disabled={saving}
+            disabled={saving || generatingSummary}
           >
             {saving
               ? form.presentationFile
@@ -1585,6 +1657,16 @@ function LessonFormModal({ lesson, subjects, onClose, onSave }) {
             <option>Scheduled</option>
           </select>
         </Field>
+        <Field label="Topic order" hint="Use this number to position the lesson in its subject.">
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value={form.orderIndex}
+            onChange={(event) => update('orderIndex', Number(event.target.value))}
+            required
+          />
+        </Field>
         <Field label="Short summary" className="lms-field-full">
           <input
             type="text"
@@ -1600,6 +1682,35 @@ function LessonFormModal({ lesson, subjects, onClose, onSave }) {
             placeholder="Write the lesson content students will read..."
           />
         </Field>
+        <div className="lms-field-full lms-form-actions">
+          <label>
+            <input
+              type="checkbox"
+              checked={summaryConsent}
+              onChange={(event) => setSummaryConsent(event.target.checked)}
+            />{' '}
+            I agree to send this lesson title and text to OpenAI to generate a
+            summary.
+          </label>
+          <button
+            type="button"
+            className="lms-btn lms-btn-secondary lms-btn-sm"
+            onClick={generateSummary}
+            disabled={
+              generatingSummary ||
+              !summaryConsent ||
+              !form.subjectId ||
+              !form.content.trim()
+            }
+          >
+            {generatingSummary ? 'Generating summary...' : 'Generate with AI'}
+          </button>
+          {summaryError && (
+            <p className="lms-inline-error" role="alert">
+              {summaryError}
+            </p>
+          )}
+        </div>
         <Field
           label="Lesson file attachment"
           hint="Upload any file type (maximum 25 MB). Enrolled students can preview supported files or download it after the lesson is published."
@@ -1627,7 +1738,7 @@ function LessonFormModal({ lesson, subjects, onClose, onSave }) {
   )
 }
 
-function QuizManagement({ quizzes, subjects, onSave }) {
+function QuizManagement({ quizzes, subjects, slides, onSave }) {
   const [searchParams] = useSearchParams()
   const [search, setSearch] = useState(() => searchParams.get('q') || '')
   const [editing, setEditing] = useState(() =>
@@ -1653,7 +1764,9 @@ function QuizManagement({ quizzes, subjects, onSave }) {
             type="button"
             className="lms-btn lms-btn-primary"
             onClick={() =>
-              setEditing({ subjectId: searchParams.get('classId') || '' })
+              setEditing({
+                subjectId: searchParams.get('classId') || subjects[0]?.id || '',
+              })
             }
           >
             <Icon name="plus" size={16} />
@@ -1749,6 +1862,7 @@ function QuizManagement({ quizzes, subjects, onSave }) {
         <QuizFormModal
           quiz={editing}
           subjects={subjects}
+          slides={slides}
           onClose={() => setEditing(null)}
           onSave={(quiz) => {
             onSave(quiz)
@@ -1768,15 +1882,16 @@ const blankQuestion = () => ({
   answer: 0,
 })
 
-function QuizFormModal({ quiz, subjects, onClose, onSave }) {
+function QuizFormModal({ quiz, subjects, slides, onClose, onSave }) {
   const notify = useToast()
   const isEditing = Boolean(quiz.id)
   const [form, setForm] = useState({
     title: quiz.title || '',
     subjectId: quiz.subjectId || subjects[0]?.id || '',
-    timeLimit: quiz.timeLimit || 15,
+    topicId: quiz.topicId || '',
+    timeLimit: 10,
     maxScore: quiz.maxScore || 100,
-    passing: quiz.passing || 75,
+    passing: 75,
     due: quiz.due || 'Nov 30, 2026',
     status: quiz.status || 'Draft',
   })
@@ -1826,8 +1941,64 @@ function QuizFormModal({ quiz, subjects, onClose, onSave }) {
       ),
     )
 
+  const importQuestions = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const imported = JSON.parse(await file.text())
+      const questionsToImport = Array.isArray(imported)
+        ? imported
+        : imported.questions
+      if (
+        !Array.isArray(questionsToImport) ||
+        questionsToImport.length < 1 ||
+        questionsToImport.length > 20
+      ) {
+        throw new Error('The JSON file must contain between 1 and 20 questions.')
+      }
+
+      const normalizedQuestions = questionsToImport.map((question, index) => {
+        if (!question || typeof question !== 'object' || Array.isArray(question)) {
+          throw new Error(`Question ${index + 1} must be a JSON object.`)
+        }
+        const type = question.type || 'multiple_choice'
+        return {
+          ...question,
+          id: question.id || `imported-question-${index + 1}`,
+          prompt: typeof question.prompt === 'string' ? question.prompt : '',
+          type,
+          options: ['short_answer', 'paragraph'].includes(type)
+            ? []
+            : Array.isArray(question.options)
+              ? question.options
+              : [],
+          answer:
+            question.answer ??
+            question.correctAnswers ??
+            question.correct_answer ??
+            (type === 'checkboxes' ? [] : ''),
+        }
+      })
+      setQuestions(normalizedQuestions)
+      notify(`${normalizedQuestions.length} questions imported.`)
+    } catch (error) {
+      notify(error.message || 'Could not import questions from this JSON file.', 'error')
+    } finally {
+      event.target.value = ''
+    }
+  }
+
   const handleSubmit = (event) => {
     event.preventDefault()
+    if (!isEditing && !form.topicId) {
+      notify('Choose the lesson this quiz belongs to.', 'error')
+      return
+    }
+    if (questions.length > 20) {
+      notify('A quiz can have no more than 20 questions.', 'error')
+      return
+    }
     const invalidCheckboxQuestion = questions.find(
       (question) =>
         question.type === 'checkboxes' &&
@@ -1851,6 +2022,7 @@ function QuizFormModal({ quiz, subjects, onClose, onSave }) {
       attempts: quiz.attempts || 0,
       average: quiz.average ?? null,
       questionList: validQuestions,
+      topicId: form.topicId,
     })
   }
 
@@ -1889,7 +2061,10 @@ function QuizFormModal({ quiz, subjects, onClose, onSave }) {
           <Field label="Subject">
             <select
               value={form.subjectId}
-              onChange={(event) => update('subjectId', event.target.value)}
+              onChange={(event) => {
+                update('subjectId', event.target.value)
+                update('topicId', '')
+              }}
             >
               {subjects.map((subject) => (
                 <option value={subject.id} key={subject.id}>
@@ -1906,14 +2081,29 @@ function QuizFormModal({ quiz, subjects, onClose, onSave }) {
               placeholder="e.g. Nov 30, 2026"
             />
           </Field>
+          <Field label="Topic / lesson">
+            <select
+              value={form.topicId}
+              onChange={(event) => update('topicId', event.target.value)}
+              required={!isEditing}
+            >
+              <option value="">
+                {isEditing ? 'Not linked to a topic' : 'Select a lesson'}
+              </option>
+              {slides
+                .filter((slide) => slide.classId === form.subjectId)
+                .sort((left, right) =>
+                  Number(left.orderIndex ?? 0) - Number(right.orderIndex ?? 0),
+                )
+                .map((slide) => (
+                  <option value={slide.id} key={slide.id}>
+                    {slide.title}
+                  </option>
+                ))}
+            </select>
+          </Field>
           <Field label="Timer (minutes)">
-            <input
-              type="number"
-              min="1"
-              max="180"
-              value={form.timeLimit}
-              onChange={(event) => update('timeLimit', event.target.value)}
-            />
+            <input type="number" value="10" readOnly />
           </Field>
           <Field label="Maximum score">
             <input
@@ -1924,13 +2114,7 @@ function QuizFormModal({ quiz, subjects, onClose, onSave }) {
             />
           </Field>
           <Field label="Passing percentage">
-            <input
-              type="number"
-              min="1"
-              max="100"
-              value={form.passing}
-              onChange={(event) => update('passing', event.target.value)}
-            />
+            <input type="number" value="75" readOnly />
           </Field>
           <Field label="Visibility">
             <select
@@ -1948,10 +2132,26 @@ function QuizFormModal({ quiz, subjects, onClose, onSave }) {
             <h2>Questions</h2>
             <p>Add questions and mark the correct answer for automatic scoring.</p>
           </div>
+          <Field
+            label="Import existing quiz questions (.json)"
+            className="lms-field-full"
+            hint="Upload a JSON array of questions or an object containing a questions array."
+          >
+            <input
+              type="file"
+              accept=".json,application/json"
+              onChange={importQuestions}
+            />
+          </Field>
           <button
             type="button"
             className="lms-btn lms-btn-secondary lms-btn-sm"
-            onClick={() => setQuestions((current) => [...current, blankQuestion()])}
+            disabled={questions.length >= 20}
+            onClick={() =>
+              setQuestions((current) =>
+                current.length >= 20 ? current : [...current, blankQuestion()],
+              )
+            }
           >
             <Icon name="plus" size={13} />
             Add question
@@ -2225,14 +2425,76 @@ function StudentPerformance({ students, subjects }) {
 
 const csvEscape = (value) => `"${String(value).replaceAll('"', '""')}"`
 
-function FacultyReports({ subjects }) {
+const xmlEscape = (value) =>
+  String(value ?? '')
+    .split('')
+    .filter((character) => {
+      const code = character.charCodeAt(0)
+      return (
+        code >= 0x20 ||
+        code === 0x09 ||
+        code === 0x0a ||
+        code === 0x0d
+      )
+    })
+    .join('')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;')
+
+const excelColumn = (index) => {
+  let column = ''
+  let value = index + 1
+  while (value > 0) {
+    const remainder = (value - 1) % 26
+    column = String.fromCharCode(65 + remainder) + column
+    value = Math.floor((value - 1) / 26)
+  }
+  return column
+}
+
+function FacultyReports({ subjects, quizAttempts }) {
   const notify = useToast()
   const [searchParams] = useSearchParams()
   const [sortBy, setSortBy] = useState('surname')
   const [subjectFilter, setSubjectFilter] = useState('All')
   const [search, setSearch] = useState(() => searchParams.get('q') || '')
 
-  const rows = []
+  const rows = quizAttempts
+    .filter((attempt) =>
+      subjectFilter === 'All' || attempt.subjectCode === subjectFilter,
+    )
+    .filter((attempt) =>
+      `${attempt.studentName} ${attempt.username} ${attempt.quizTitle}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+    )
+    .map((attempt, index) => {
+      const nameParts = String(attempt.studentName || '').trim().split(/\s+/)
+      const surname =
+        nameParts.length > 1 ? nameParts[nameParts.length - 1] : nameParts[0] || ''
+      return {
+        ...attempt,
+        id: attempt.id || `${attempt.studentId}-${attempt.quizId}-${index}`,
+        name: attempt.studentName || 'Student',
+        surname,
+        attempts: quizAttempts.filter(
+          (item) =>
+            item.studentId === attempt.studentId &&
+            item.quizId === attempt.quizId,
+        ).length,
+        status: attempt.passed ? 'Passed' : 'Failed',
+      }
+    })
+    .sort((left, right) =>
+      sortBy === 'score'
+        ? right.score - left.score
+        : sortBy === 'subject'
+          ? left.subjectCode.localeCompare(right.subjectCode)
+          : left.surname.localeCompare(right.surname),
+    )
 
   const average = Math.round(
     rows.reduce((total, report) => total + report.score, 0) /
@@ -2244,6 +2506,7 @@ function FacultyReports({ subjects }) {
     const header = [
       'Surname',
       'Student',
+      'Quiz',
       'Subject',
       'Score',
       'Passing',
@@ -2253,6 +2516,7 @@ function FacultyReports({ subjects }) {
     const body = rows.map((report) => [
       report.surname,
       report.name,
+      report.quizTitle,
       report.subjectCode,
       report.score,
       report.passing,
@@ -2267,7 +2531,7 @@ function FacultyReports({ subjects }) {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = 'learnspace-score-report.csv'
+    link.download = 'learnspace-overall-quiz-scores.csv'
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -2275,12 +2539,99 @@ function FacultyReports({ subjects }) {
     notify('Score report exported as a CSV spreadsheet.')
   }
 
+  const exportXlsx = async () => {
+    try {
+      const { strToU8, zipSync } = await import('fflate')
+      const sheetRows = [
+        [
+          'Surname',
+          'Student',
+          'Quiz',
+          'Subject',
+          'Score',
+          'Passing',
+          'Attempts',
+          'Status',
+        ],
+        ...rows.map((report) => [
+          report.surname,
+          report.name,
+          report.quizTitle,
+          report.subjectCode,
+          report.score,
+          report.passing,
+          report.attempts,
+          report.status,
+        ]),
+      ]
+      const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheetRows
+        .map(
+          (row, rowIndex) =>
+            `<row r="${rowIndex + 1}">${row
+              .map((value, columnIndex) => {
+                const cell = `${excelColumn(columnIndex)}${rowIndex + 1}`
+                if (typeof value === 'number' && Number.isFinite(value)) {
+                  return `<c r="${cell}"><v>${value}</v></c>`
+                }
+                return `<c r="${cell}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`
+              })
+              .join('')}</row>`,
+        )
+        .join('')}</sheetData></worksheet>`
+      const files = {
+        '[Content_Types].xml': strToU8(
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+            '<Default Extension="xml" ContentType="application/xml"/>' +
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+            '</Types>',
+        ),
+        '_rels/.rels': strToU8(
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+            '</Relationships>',
+        ),
+        'xl/workbook.xml': strToU8(
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+            '<sheets><sheet name="Quiz Scores" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        ),
+        'xl/_rels/workbook.xml.rels': strToU8(
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+            '</Relationships>',
+        ),
+        'xl/worksheets/sheet1.xml': strToU8(worksheet),
+      }
+      const blob = new Blob([zipSync(files)], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'learnspace-overall-quiz-scores.xlsx'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      notify('Score report exported as an Excel workbook.')
+    } catch (error) {
+      console.error('Excel report export failed:', error)
+      notify('Could not export the Excel report. Please try again.', 'error')
+    }
+  }
+
   return (
     <>
       <PageHeader
         eyebrow="Reports"
         title="Score reports"
-        description="Sort scores by surname or score, then print or export a clean report for your records."
+        description="Review every quiz attempt by student, sort the records, and print or export the overall score report."
         actions={
           <>
             <button
@@ -2294,9 +2645,16 @@ function FacultyReports({ subjects }) {
             <button
               type="button"
               className="lms-btn lms-btn-primary"
-              onClick={exportCsv}
+              onClick={exportXlsx}
             >
               <Icon name="fileSpreadsheet" size={16} />
+              Export Excel
+            </button>
+            <button
+              type="button"
+              className="lms-btn lms-btn-secondary"
+              onClick={exportCsv}
+            >
               Export CSV
             </button>
           </>
@@ -2373,7 +2731,7 @@ function FacultyReports({ subjects }) {
 
       <section className="lms-card lms-report-page">
         <div className="lms-report-title">
-          <h2>LearnSpace · Quiz Score Report</h2>
+          <h2>LearnSpace · Overall Quiz Score Report</h2>
           <p>
             Generated {new Date().toLocaleDateString('en-US', {
               month: 'long',
@@ -2403,6 +2761,7 @@ function FacultyReports({ subjects }) {
               <tr>
                 <th>Surname</th>
                 <th>Student</th>
+                <th>Quiz</th>
                 <th>Subject</th>
                 <th>Score</th>
                 <th>Passing</th>
@@ -2415,6 +2774,7 @@ function FacultyReports({ subjects }) {
                 <tr key={report.id}>
                   <td className="lms-cell-strong">{report.surname}</td>
                   <td>{report.name}</td>
+                  <td>{report.quizTitle}</td>
                   <td className="lms-cell-muted">{report.subjectCode}</td>
                   <td>
                     <span className="lms-score">
@@ -2453,7 +2813,8 @@ function FacultyReports({ subjects }) {
         <Icon name="fileText" size={15} />
         <span>
           Use <strong>Print</strong> to save as PDF from your browser, or{' '}
-          <strong>Export CSV</strong> to open the report in a spreadsheet.
+          <strong>Export Excel</strong> or <strong>Export CSV</strong> to open
+          the report in a spreadsheet.
         </span>
       </div>
     </>

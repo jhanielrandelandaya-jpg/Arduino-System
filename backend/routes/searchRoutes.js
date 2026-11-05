@@ -56,7 +56,8 @@ router.get('/', requireAuth, requireRole('Faculty', 'Student'), async (req, res)
     for (const quiz of quizzes) {
       const cls = classesById.get(quiz.class_id)
       if (!cls) continue
-      const matches = pattern.test(quiz.quiz_title || '') || pattern.test(quiz.subject_code || '')
+      const quizTitle = quiz.quiz_title || quiz.title || ''
+      const matches = pattern.test(quizTitle) || pattern.test(quiz.subject_code || '')
       if (!matches) continue
       if (req.userRole === 'Student' && quiz.status !== 'Published') {
         continue
@@ -64,19 +65,55 @@ router.get('/', requireAuth, requireRole('Faculty', 'Student'), async (req, res)
       quizResults.push({
         type: 'quiz',
         id: quiz.id,
-        title: quiz.quiz_title,
+        title: quizTitle,
         subtitle: `${quiz.subject_code || 'Quiz'} · ${quiz.status}`,
         icon: 'quiz',
         tone: 'violet',
         path: `${req.userRole === 'Faculty' ? '/faculty' : '/student'}/quizzes`,
-        query: quiz.quiz_title,
+        query: quizTitle,
       })
     }
 
     const base = req.userRole === 'Faculty' ? '/faculty' : '/student'
+    const slides = await database
+      .collection('slides')
+      .find({
+        class_id: { $in: classes.map((cls) => cls.id) },
+        ...(req.userRole === 'Student' ? { status: 'Published' } : {}),
+      })
+      .toArray()
+    const slideResults = []
+    for (const slide of slides) {
+      const content = (() => {
+        try {
+          return JSON.parse(slide.content_json || '[]')
+        } catch {
+          return []
+        }
+      })()
+      const searchableContent = content
+        .map((item) => `${item?.text || ''} ${item?.summary || ''}`)
+        .join(' ')
+      const matches =
+        pattern.test(slide.title || '') || pattern.test(searchableContent)
+      if (!matches) continue
+      const cls = classesById.get(slide.class_id)
+      slideResults.push({
+        type: 'topic',
+        id: slide.id,
+        title: slide.title,
+        subtitle: `${cls?.subject_code || ''} · ${cls?.class_name || ''}`,
+        icon: 'fileText',
+        tone: 'violet',
+        path: `${base}/lessons`,
+        query: slide.title,
+      })
+    }
+
     const results = [
       ...classResults.map((item) => ({ ...item, path: item.path || `${base}/subjects` })),
       ...quizResults.map((item) => ({ ...item, path: item.path || `${base}/quizzes` })),
+      ...slideResults,
     ]
 
     if (req.userRole === 'Faculty') {
